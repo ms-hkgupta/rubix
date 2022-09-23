@@ -1,0 +1,76 @@
+{
+    "type": "awesome-json-renderer",
+    "version": "1.0",
+    "body": [
+      {
+        "type": "card",
+        "children": [
+          {
+            "type": "container",
+            "props":{
+              "layout":"horizontal"
+            },
+            "children": [
+              {
+                "type": "span",
+                "props": {
+                  "innerText": "User Name"
+                }
+              },
+              {
+                "type": "textField",
+                "props": {
+                  "type": "text"
+                }
+              }
+            ]
+          },
+          {
+            "type": "container",
+            "props":{
+              "layout":"horizontal"
+            },
+            "children": [
+              {
+                "type": "span",
+                "props": {
+                  "innerText": "Password"
+                }
+              },
+              {
+                "type": "textField",
+                "props": {
+                  "type": "password"
+                }
+              }
+            ]
+          },
+          {
+            "type": "div",
+            "children": [
+              {
+                "type": "checkbox",
+                "props": {
+                  "innerText": "save for future login"
+                }
+              }
+            ]
+          },
+          {
+            "type": "button",
+            "props": {
+              "appearance": "accent"
+            },
+            "children": [
+              {
+                "type": "span",
+                "props": {
+                  "innerText": "Submit"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  }
