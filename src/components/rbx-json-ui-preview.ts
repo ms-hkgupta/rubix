@@ -47,7 +47,7 @@ export class RubixJsonUiPreview extends LitElement{
         <div class="preview">
            <div class="renderer">
                 <div>Preview</div>
-                <aw-json-renderer .json=${this.json}></aw-json-renderer>
+                <rbx-json-renderer .json=${this.json}></rbx-json-renderer>
            </div>
 
            <div class="text">

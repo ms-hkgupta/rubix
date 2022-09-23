@@ -2,7 +2,7 @@ import { css, html, LitElement } from "lit";
 import { property } from "lit/decorators.js";
 import { styleMap } from "lit/directives/style-map.js";
 
-export class AwesomeContainer extends LitElement{
+export class RubixContainer extends LitElement{
     static styles = css`
         .container{
             display: flex;
@@ -26,7 +26,6 @@ export class AwesomeContainer extends LitElement{
         const styles = {
             'flex-direction': this.layout === 'vertical' ? 'column': 'row'
         }
-        
 
         return html`<div class="container" style=${styleMap(styles)}>
                         <slot></slot>

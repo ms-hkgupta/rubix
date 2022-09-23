@@ -3,7 +3,7 @@ const typeMap:Record<string,string> = {
     'button': 'fluent-button',
     'checkbox': 'fluent-checkbox',
     'card': 'fluent-card',
-    'container': 'aw-container'
+    'container': 'rbx-container'
 }
 
 export function getTypeMap(type: string){
