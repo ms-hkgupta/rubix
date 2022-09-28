@@ -1,0 +1,129 @@
+patch-package
+--- a/node_modules/webpack/lib/MainTemplate.js
++++ b/node_modules/webpack/lib/MainTemplate.js
+@@ -136,7 +136,7 @@ module.exports = class MainTemplate extends Tapable {
+ 			/** @type {string[]} */
+ 			const buf = [];
+ 			if (chunk.entryModule) {
+-				buf.push("// Load entry module and return exports");
++				buf.push("// Load entry module and return exprots");
+ 				buf.push(
+ 					`return ${this.renderRequireFunctionForModule(
+ 						hash,
+@@ -175,7 +175,7 @@ module.exports = class MainTemplate extends Tapable {
+ 			return Template.asString([
+ 				source,
+ 				"// The module cache",
+-				"var installedModules = {};"
++				"installedModules = {};"
+ 			]);
+ 		});
+ 		this.hooks.require.tap("MainTemplate", (source, chunk, hash) => {
+@@ -395,7 +395,7 @@ module.exports = class MainTemplate extends Tapable {
+ 		buf.push(this.hooks.localVars.call("", chunk, hash));
+ 		buf.push("");
+ 		buf.push("// The require function");
+-		buf.push(`function ${this.requireFn}(moduleId) {`);
++		buf.push(`${this.requireFn} = function(moduleId) {`);
+ 		buf.push(Template.indent(this.hooks.require.call("", chunk, hash)));
+ 		buf.push("}");
+ 		buf.push("");
+--- a/node_modules/webpack/lib/TemplatedPathPlugin.js
++++ b/node_modules/webpack/lib/TemplatedPathPlugin.js
+@@ -111,7 +111,7 @@ const replacePathVariables = (path, data) => {
+ 				REGEXP_MODULEHASH,
+ 				withHashLength(getReplacer(moduleHash), moduleHashWithLength)
+ 			)
+-			.replace(REGEXP_ID, getReplacer(chunkId))
++			.replace(REGEXP_ID, getReplacer(chunkId, true))
+ 			.replace(REGEXP_MODULEID, getReplacer(moduleId))
+ 			.replace(REGEXP_NAME, getReplacer(chunkName))
+ 			.replace(REGEXP_FILE, getReplacer(data.filename))
+--- a/node_modules/webpack/lib/web/JsonpMainTemplatePlugin.js
++++ b/node_modules/webpack/lib/web/JsonpMainTemplatePlugin.js
+@@ -109,16 +109,16 @@ class JsonpMainTemplatePlugin {
+ 						"// object to store loaded and loading chunks",
+ 						"// undefined = chunk not loaded, null = chunk preloaded/prefetched",
+ 						"// Promise = chunk loading, 0 = chunk loaded",
+-						"var installedChunks = {",
++						"installedChunks = {\"F6A22FA4-inline\": 0};",
+ 						Template.indent(
+-							chunk.ids.map(id => `${JSON.stringify(id)}: 0`).join(",\n")
++							chunk.ids.map(id => `installedChunks[${JSON.stringify(id)}] = 0`).join(",\n")
+ 						),
+-						"};",
++						// "};",
+ 						"",
+ 						needEntryDeferringCode(chunk)
+ 							? needPrefetchingCode(chunk)
+-								? "var deferredModules = [], deferredPrefetch = [];"
+-								: "var deferredModules = [];"
++								? "deferredModules = [], deferredPrefetch = [];"
++								: "deferredModules = [];"
+ 							: ""
+ 					);
+ 				}
+@@ -353,6 +353,44 @@ class JsonpMainTemplatePlugin {
+ 					const withPrefetch = needPrefetchingCode(chunk);
+ 					return Template.asString([
+ 						source,
++						"var parentJsonpFunction = window[\"webpackJsonp\"];",
++						"window[\"webpackJsonp\"] = function webpackJsonpCallback(chunkIds, moreModules, executeModules) {",
++						"var moduleId, chunkId, i = 0,",
++						"resolves = [],",
++						"result;",
++						"for (; i < chunkIds.length; i++) {",
++							"chunkId = chunkIds[i];",
++							"if (installedChunks[chunkId]) {",
++								"resolves.push(installedChunks[chunkId][0]);",
++							"}",
++							"installedChunks[chunkId] = 0;",
++						"}",
++						"for (moduleId in moreModules) {",
++							"if (Object.prototype.hasOwnProperty.call(moreModules, moduleId)) {",
++								"modules[moduleId] = moreModules[moduleId];",
++							"}",
++						"}",
++						"if (parentJsonpFunction) parentJsonpFunction(chunkIds, moreModules, executeModules);",
++						"while (resolves.length) {",
++							"resolves.shift()();",
++						"}",
++						"if (executeModules) {",
++							"for (i = 0; i < executeModules.length; i++) {",
++								"result = __webpack_require__(__webpack_require__.s = executeModules[i]);",
++							"}",
++						"}",
++						"return result;",
++					"};",
++
++					"function removeExcludedChunk(chunks) {",
++						"if (!chunks) return undefined;",
++						"for (var i = chunks.length - 1; i >= 0; i--) {",
++							"if (chunks[i].indexOf('exclude') >= 0) {",
++								"chunks.splice(i, 1);",
++							"}",
++						"}",
++						"return chunks;",
++					"}",
+ 						"",
+ 						"// install a JSONP callback for chunk loading",
+ 						"function webpackJsonpCallback(data) {",
+@@ -360,6 +398,9 @@ class JsonpMainTemplatePlugin {
+ 							"var chunkIds = data[0];",
+ 							"var moreModules = data[1];",
+ 							withDefer ? "var executeModules = data[2];" : "",
++							withDefer ? "if (executeModules && executeModules.length > 0) {" : "",
++								withDefer ? "executeModules[0] = removeExcludedChunk(executeModules[0]);": "",
++							withDefer ? "}" : "",,
+ 							withPrefetch ? "var prefetchChunks = data[3] || [];" : "",
+ 							'// add "moreModules" to the modules object,',
+ 							'// then flag all "chunkIds" as loaded and fire callback',
+@@ -367,7 +408,7 @@ class JsonpMainTemplatePlugin {
+ 							"for(;i < chunkIds.length; i++) {",
+ 							Template.indent([
+ 								"chunkId = chunkIds[i];",
+-								"if(Object.prototype.hasOwnProperty.call(installedChunks, chunkId) && installedChunks[chunkId]) {",
++								"if(installedChunks[chunkId]) {",
+ 								Template.indent("resolves.push(installedChunks[chunkId][0]);"),
+ 								"}",
+ 								"installedChunks[chunkId] = 0;"

@@ -1,0 +1,2257 @@
+patch-package
+new file mode 100644
+--- /dev/null
++++ b/node_modules/@ngtools/webpack/src/application_entry_resolver.js
+@@ -0,0 +1,109 @@
++"use strict";
++Object.defineProperty(exports, "__esModule", { value: true });
++// @ignoreDep typescript
++const fs = require("fs");
++const path_1 = require("path");
++const ts = require("typescript");
++const refactor_1 = require("./refactor");
++
++function getIndicesOf(searchStr, str, caseSensitive) {
++    var searchStrLen = searchStr.length;
++    if (searchStrLen == 0) {
++        return [];
++    }
++    var startIndex = 0, index, indices = [];
++    if (!caseSensitive) {
++        str = str.toLowerCase();
++        searchStr = searchStr.toLowerCase();
++    }
++    while ((index = str.indexOf(searchStr, startIndex)) > -1) {
++        indices.push(index);
++        startIndex = index + searchStrLen;
++    }
++    return indices;
++}
++
++function readApplicationFile(applicationFilePath){
++    const fileContent = fs.readFileSync(applicationFilePath, 'utf8');
++    return fileContent;
++}
++function getModuleNamesFromSource(sourceText){
++    var indexes = getIndicesOf('ngModule', sourceText, true);
++    const entryModuleNames = [];
++    
++    indexes.forEach(index => {
++        var startIndex = sourceText.indexOf(":", index);
++        var stopIndex = sourceText.indexOf(",", index); 
++        var moduleName = sourceText.substring(startIndex + 1, stopIndex);
++        if (moduleName.indexOf("\n")>0){
++            moduleName = moduleName.substring(0, moduleName.indexOf("\n"));
++        }
++        if (moduleName.indexOf("}")>0){
++            moduleName = moduleName.substring(0, moduleName.indexOf("}"));
++        }
++        if (moduleName && moduleName.length>0 && entryModuleNames.indexOf(moduleName) < 0){
++            entryModuleNames.push(moduleName.trim());
++        }
++    });
++    return entryModuleNames; 
++}
++
++function getModulePathFromSource(sourceText, entryModules){
++    var sourceLines = sourceText.split("\n");
++    var importLines = [];
++    var modulePaths = [];
++    sourceLines.forEach(line=>{
++        if(line.indexOf("import")>=0){
++            var importStatements = line.split('\;');
++            importStatements.forEach(importStatement=>{
++                if (importStatement.trim().length> 0 && !importStatement.trim().startsWith("//")){
++                    importLines.push(importStatement);
++                }
++            }); 
++            //importLines = importLines.concat(importStatements);
++        }
++    }); 
++
++    entryModules.forEach(entryModule => {
++        importLines.forEach(importStatement=>{
++            if (importStatement.indexOf(entryModule)> 0){ //contains entry module declarations
++                let startIndex = 0;
++                let stopIndex = 0
++                if (importStatement.indexOf("'")>0) {
++                    startIndex = importStatement.indexOf("'");
++                    stopIndex = importStatement.indexOf("'", startIndex + 1);
++                }
++                if (importStatement.indexOf('"')>0) {
++                    //Single quotes has been used in the statement
++                    startIndex = importStatement.indexOf('"');
++                    stopIndex = importStatement.indexOf('"', startIndex + 1);
++                    
++                }
++                let modulePath = importStatement.substring(startIndex + 1, stopIndex); 
++                let moduleFullPath = modulePath + "#" + entryModule; 
++				moduleFullPath = path_1.resolve(path_1.join(process.cwd(), "src", moduleFullPath));
++				if (modulePaths.indexOf(moduleFullPath) < 0){
++					modulePaths.push(moduleFullPath);
++                }
++                
++            }
++        }); 
++    });
++
++    return modulePaths;
++    
++}
++function resolveEntryModulesFromApplicationFile(applicationFilePath) {
++    const sourceText = readApplicationFile(applicationFilePath); 
++    const entryModuleNames = getModuleNamesFromSource(sourceText); 
++    const entryModules = getModulePathFromSource(sourceText, entryModuleNames);
++    
++    if (entryModules.length > 0) {
++        return entryModules;
++    }
++    // shrug... something bad happened and we couldn't find the import statement.
++    throw new Error('Tried to find bootstrap code, but could not. Specify either '
++        + 'statically analyzable bootstrap code or pass in an entryModule '
++        + 'to the plugins options.');
++}
++exports.resolveEntryModulesFromApplicationFile = resolveEntryModulesFromApplicationFile;
+\ No newline at end of file
+--- a/node_modules/@ngtools/webpack/src/entry_resolver.js
++++ b/node_modules/@ngtools/webpack/src/entry_resolver.js
+@@ -10,12 +10,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
+ const core_1 = require("@angular-devkit/core");
+ const ts = require("typescript");
+ const refactor_1 = require("./refactor");
++
+ function _recursiveSymbolExportLookup(refactor, symbolName, host, program) {
+     // Check this file.
+     const hasSymbol = refactor.findAstNodes(null, ts.SyntaxKind.ClassDeclaration)
+         .some((cd) => {
+-        return cd.name != undefined && cd.name.text == symbolName;
+-    });
++            return cd.name != undefined && cd.name.text == symbolName;
++        });
+     if (hasSymbol) {
+         return refactor.fileName;
+     }
+@@ -59,8 +60,8 @@ function _recursiveSymbolExportLookup(refactor, symbolName, host, program) {
+                 const source = new refactor_1.TypeScriptFileRefactor(module, host, program);
+                 const hasSymbol = source.findAstNodes(null, ts.SyntaxKind.ClassDeclaration)
+                     .some((cd) => {
+-                    return cd.name != undefined && cd.name.text == symbolName;
+-                });
++                        return cd.name != undefined && cd.name.text == symbolName;
++                    });
+                 if (hasSymbol) {
+                     return module;
+                 }
+@@ -69,6 +70,7 @@ function _recursiveSymbolExportLookup(refactor, symbolName, host, program) {
+     }
+     return null;
+ }
++
+ function _symbolImportLookup(refactor, symbolName, host, program) {
+     // We found the bootstrap variable, now we just need to get where it's imported.
+     const imports = refactor.findAstNodes(null, ts.SyntaxKind.ImportDeclaration)
+@@ -85,16 +87,15 @@ function _symbolImportLookup(refactor, symbolName, host, program) {
+             continue;
+         }
+         const module = resolvedModule.resolvedModule.resolvedFileName;
+-        if (decl.importClause.namedBindings
+-            && decl.importClause.namedBindings.kind == ts.SyntaxKind.NamespaceImport) {
++        if (decl.importClause.namedBindings &&
++            decl.importClause.namedBindings.kind == ts.SyntaxKind.NamespaceImport) {
+             const binding = decl.importClause.namedBindings;
+             if (binding.name.text == symbolName) {
+                 // This is a default export.
+                 return module;
+             }
+-        }
+-        else if (decl.importClause.namedBindings
+-            && decl.importClause.namedBindings.kind == ts.SyntaxKind.NamedImports) {
++        } else if (decl.importClause.namedBindings &&
++            decl.importClause.namedBindings.kind == ts.SyntaxKind.NamedImports) {
+             const binding = decl.importClause.namedBindings;
+             for (const specifier of binding.elements) {
+                 if (specifier.name.text == symbolName) {
+@@ -110,26 +111,105 @@ function _symbolImportLookup(refactor, symbolName, host, program) {
+     }
+     return null;
+ }
++
+ function resolveEntryModuleFromMain(mainPath, host, program) {
+     const source = new refactor_1.TypeScriptFileRefactor(mainPath, host, program);
+-    const bootstrap = source.findAstNodes(source.sourceFile, ts.SyntaxKind.CallExpression, true)
++    const bootstraps = source.findAstNodes(source.sourceFile, ts.SyntaxKind.CallExpression, true)
+         .map(node => node)
+         .filter(call => {
+-        const access = call.expression;
+-        return access.kind == ts.SyntaxKind.PropertyAccessExpression
+-            && access.name.kind == ts.SyntaxKind.Identifier
+-            && (access.name.text == 'bootstrapModule'
+-                || access.name.text == 'bootstrapModuleFactory');
+-    })
++            const access = call.expression;
++            return access.kind == ts.SyntaxKind.PropertyAccessExpression &&
++                access.name.kind == ts.SyntaxKind.Identifier &&
++                (access.name.text == 'bootstrapModule' ||
++                    access.name.text == 'bootstrapModuleFactory');
++        })
+         .map(node => node.arguments[0])
+         .filter(node => node.kind == ts.SyntaxKind.Identifier);
+-    if (bootstrap.length === 1) {
+-        const bootstrapSymbolName = bootstrap[0].text;
++    if (bootstraps.length < 1) {
++        return null;
++    }
++    const entryModules = [];
++    bootstraps.forEach((bootstrap) => {
++        const bootstrapSymbolName = bootstrap.text;
+         const module = _symbolImportLookup(source, bootstrapSymbolName, host, program);
+         if (module) {
+-            return `${module.replace(/\.ts$/, '')}#${bootstrapSymbolName}`;
++            entryModules.push(`${module.replace(/\.ts$/, '')}#${bootstrapSymbolName}`);
+         }
++    });
++
++    if (entryModules.length > 0) {
++        return entryModules;
+     }
+-    return null;
++    // shrug... something bad happened and we couldn't find the import statement.
++    throw new Error('Tried to find bootstrap code, but could not. Specify either ' +
++        'statically analyzable bootstrap code or pass in an entryModule ' +
++        'to the plugins options.');
++}
++
++function getIndicesOf(searchStr, str, caseSensitive) {
++    var searchStrLen = searchStr.length;
++    if (searchStrLen == 0) {
++        return [];
++    }
++    var startIndex = 0,
++        index, indices = [];
++    if (!caseSensitive) {
++        str = str.toLowerCase();
++        searchStr = searchStr.toLowerCase();
++    }
++    while ((index = str.indexOf(searchStr, startIndex)) > -1) {
++        indices.push(index);
++        startIndex = index + searchStrLen;
++    }
++    return indices;
++}
++
++function resolveEntryModulesFromApplicationFile(applicationFilePath, host, program) {
++    const source = new refactor_1.TypeScriptFileRefactor(applicationFilePath, host, program);
++    const sourceText = source.sourceText;
++    var indexes = getIndicesOf('ngModule', sourceText, true);
++    const entryModuleNames = [];
++    const entryModules = [];
++    indexes.forEach(index => {
++        var startIndex = sourceText.indexOf(":", index);
++        var stopIndex = sourceText.indexOf(",", index);
++        var moduleName = sourceText.substring(startIndex + 1, stopIndex);
++        if (moduleName.indexOf("\n") > 0) {
++            moduleName = moduleName.substring(0, moduleName.indexOf("\n"));
++        }
++        if (moduleName.indexOf("}") > 0) {
++            moduleName = moduleName.substring(0, moduleName.indexOf("}"));
++        }
++        if (moduleName && moduleName.length > 0) {
++            entryModuleNames.push(moduleName.trim());
++        }
++    });
++    const moduleImports = source.findAstNodes(source.sourceFile, ts.SyntaxKind.ImportDeclaration, true)
++        .map(node => node)
++        .filter(call => {
++            var importClause = call.importClause.namedBindings.getText();
++            entryModuleNames.forEach(entryModuleItem => {
++                if (importClause.indexOf(entryModuleItem) >= 0) {
++                    var modulePath = call.getChildAt(call.getChildCount() - 1).getText();
++                    if (modulePath.indexOf(";") >= 0) {
++                        modulePath = call.getChildAt(call.getChildCount() - 2).getText();
++                    }
++                    modulePath = path_1.resolve(path_1.join(process.cwd(), "src"), eval(modulePath)) + '#' + entryModuleItem; //to remove the quotations.
++                    modulePath = modulePath.replace(/\\/g, '/');
++                    entryModules.push(modulePath);
++                }
++            });
++
++            //call.getText()
++
++        });
++
++    if (entryModules.length > 0) {
++        return entryModules;
++    }
++    // shrug... something bad happened and we couldn't find the import statement.
++    throw new Error('Tried to find bootstrap code, but could not. Specify either ' +
++        'statically analyzable bootstrap code or pass in an entryModule ' +
++        'to the plugins options.');
+ }
+ exports.resolveEntryModuleFromMain = resolveEntryModuleFromMain;
+\ No newline at end of file
+new file mode 100644
+--- /dev/null
++++ b/node_modules/@ngtools/webpack/src/fxp_angular_compiler_plugin.js
+@@ -0,0 +1,1136 @@
++"use strict";
++Object.defineProperty(exports, "__esModule", { value: true });
++/**
++ * @license
++ * Copyright Google Inc. All Rights Reserved.
++ *
++ * Use of this source code is governed by an MIT-style license that can be
++ * found in the LICENSE file at https://angular.io/license
++ */
++const core_1 = require("@angular-devkit/core");
++const node_1 = require("@angular-devkit/core/node");
++const compiler_cli_1 = require("@angular/compiler-cli");
++const child_process_1 = require("child_process");
++const fs = require("fs");
++const path = require("path");
++const ts = require("typescript");
++const benchmark_1 = require("./benchmark");
++const compiler_host_1 = require("./compiler_host");
++const entry_resolver_1 = require("./entry_resolver");
++const gather_diagnostics_1 = require("./gather_diagnostics");
++const interfaces_1 = require("./interfaces");
++const lazy_routes_1 = require("./lazy_routes");
++const ngcc_processor_1 = require("./ngcc_processor");
++const paths_plugin_1 = require("./paths-plugin");
++const resource_loader_1 = require("./resource_loader");
++const transformers_1 = require("./transformers");
++const ast_helpers_1 = require("./transformers/ast_helpers");
++const ctor_parameters_1 = require("./transformers/ctor-parameters");
++const type_checker_1 = require("./type_checker");
++const type_checker_messages_1 = require("./type_checker_messages");
++const utils_1 = require("./utils");
++const virtual_file_system_decorator_1 = require("./virtual_file_system_decorator");
++const webpack_input_host_1 = require("./webpack-input-host");
++const treeKill = require('tree-kill');
++const applicationEntry_resolver = require("./application_entry_resolver");
++const transformers_2 = require("./transformers/replace_ngModules");
++const Events = require('events'); 
++const EventEmitter = new Events.EventEmitter(); 
++global.EventEmitter = EventEmitter; 
++
++var PLATFORM;
++(function(PLATFORM) {
++    PLATFORM[PLATFORM["Browser"] = 0] = "Browser";
++    PLATFORM[PLATFORM["Server"] = 1] = "Server";
++})(PLATFORM = exports.PLATFORM || (exports.PLATFORM = {}));
++class AngularCompilerPlugin {
++    constructor(options) {
++        this._discoverLazyRoutes = true;
++        this._useFactories = false;
++        // Contains `moduleImportPath#exportName` => `fullModulePath`.
++        this._lazyRoutes = {};
++        this._transformers = [];
++        this._platformTransformers = null;
++        this._JitMode = false;
++        this._emitSkipped = true;
++        this._unusedFiles = new Set();
++        this._changedFileExtensions = new Set(['ts', 'tsx', 'html', 'css', 'js', 'json']);
++        // Webpack plugin.
++        this._firstRun = true;
++        this._warnings = [];
++        this._errors = [];
++        // TypeChecker process.
++        this._forkTypeChecker = true;
++        this._forkedTypeCheckerInitialized = false;
++        this._mainFields = [];
++        this._options = Object.assign({}, options);
++        this._setupOptions(this._options);
++    }
++    get options() { return this._options; }
++    get done() { return this._donePromise; }
++    get entryModule() {
++        if (!this._entryModule) {
++            return undefined;
++        }
++        return this._entryModule.map((entryModule) => {
++            const splitted = entryModule.split('#');
++            const path = splitted[0];
++            const className = splitted[1] || 'default';
++            return { path, className };
++        });
++    }
++    get typeChecker() {
++        const tsProgram = this._getTsProgram();
++        return tsProgram ? tsProgram.getTypeChecker() : null;
++    }
++    static isSupported() {
++        return compiler_cli_1.VERSION && parseInt(compiler_cli_1.VERSION.major) >= 8;
++    }
++    _setupOptions(options) {
++        benchmark_1.time('AngularCompilerPlugin._setupOptions');
++        this._logger = options.logger || node_1.createConsoleLogger();
++        // Fill in the missing options.
++        if (!options.hasOwnProperty('tsConfigPath')) {
++            throw new Error('Must specify "tsConfigPath" in the configuration of @ngtools/webpack.');
++        }
++        // TS represents paths internally with '/' and expects the tsconfig path to be in this format
++        this._tsConfigPath = utils_1.forwardSlashPath(options.tsConfigPath);
++        // Check the base path.
++        const maybeBasePath = path.resolve(process.cwd(), this._tsConfigPath);
++        let basePath = maybeBasePath;
++        if (fs.statSync(maybeBasePath).isFile()) {
++            basePath = path.dirname(basePath);
++        }
++        if (options.basePath !== undefined) {
++            basePath = path.resolve(process.cwd(), options.basePath);
++        }
++        // Parse the tsconfig contents.
++        const config = compiler_cli_1.readConfiguration(this._tsConfigPath);
++        if (config.errors && config.errors.length) {
++            throw new Error(compiler_cli_1.formatDiagnostics(config.errors));
++        }
++        this._rootNames = config.rootNames;
++        this._compilerOptions = {...config.options, ...options.compilerOptions };
++        this._basePath = config.options.basePath || basePath || '';
++        // Overwrite outDir so we can find generated files next to their .ts origin in compilerHost.
++        this._compilerOptions.outDir = '';
++        this._compilerOptions.suppressOutputPathCheck = true;
++        // Default plugin sourceMap to compiler options setting.
++        if (!options.hasOwnProperty('sourceMap')) {
++            options.sourceMap = this._compilerOptions.sourceMap || false;
++        }
++        // Force the right sourcemap options.
++        if (options.sourceMap) {
++            this._compilerOptions.sourceMap = true;
++            this._compilerOptions.inlineSources = true;
++            this._compilerOptions.inlineSourceMap = false;
++            this._compilerOptions.mapRoot = undefined;
++            // We will set the source to the full path of the file in the loader, so we don't
++            // need sourceRoot here.
++            this._compilerOptions.sourceRoot = undefined;
++        } else {
++            this._compilerOptions.sourceMap = false;
++            this._compilerOptions.sourceRoot = undefined;
++            this._compilerOptions.inlineSources = undefined;
++            this._compilerOptions.inlineSourceMap = undefined;
++            this._compilerOptions.mapRoot = undefined;
++            this._compilerOptions.sourceRoot = undefined;
++        }
++        // We want to allow emitting with errors so that imports can be added
++        // to the webpack dependency tree and rebuilds triggered by file edits.
++        this._compilerOptions.noEmitOnError = false;
++        // Set JIT (no code generation) or AOT mode.
++        if (options.skipCodeGeneration !== undefined) {
++            this._JitMode = options.skipCodeGeneration;
++        }
++        // Process i18n options.
++        if (options.i18nInFile !== undefined) {
++            this._compilerOptions.i18nInFile = options.i18nInFile;
++        }
++        if (options.i18nInFormat !== undefined) {
++            this._compilerOptions.i18nInFormat = options.i18nInFormat;
++        }
++        if (options.i18nOutFile !== undefined) {
++            this._compilerOptions.i18nOutFile = options.i18nOutFile;
++        }
++        if (options.i18nOutFormat !== undefined) {
++            this._compilerOptions.i18nOutFormat = options.i18nOutFormat;
++        }
++        if (options.locale !== undefined) {
++            this._compilerOptions.i18nInLocale = options.locale;
++            this._compilerOptions.i18nOutLocale = options.locale;
++            this._normalizedLocale = this._validateLocale(options.locale);
++        }
++        if (options.missingTranslation !== undefined) {
++            this._compilerOptions.i18nInMissingTranslations =
++                options.missingTranslation;
++        }
++        // Process forked type checker options.
++        if (options.forkTypeChecker !== undefined) {
++            this._forkTypeChecker = options.forkTypeChecker;
++        }
++        // this._forkTypeChecker = false;
++        // Add custom platform transformers.
++        if (options.platformTransformers !== undefined) {
++            this._platformTransformers = options.platformTransformers;
++        }
++        // Default ContextElementDependency to the one we can import from here.
++        // Failing to use the right ContextElementDependency will throw the error below:
++        // "No module factory available for dependency type: ContextElementDependency"
++        // Hoisting together with peer dependencies can make it so the imported
++        // ContextElementDependency does not come from the same Webpack instance that is used
++        // in the compilation. In that case, we can pass the right one as an option to the plugin.
++        this._contextElementDependencyConstructor = options.contextElementDependencyConstructor ||
++            require('webpack/lib/dependencies/ContextElementDependency');
++        // Use entryModule if available in options, otherwise resolve it from mainPath after program
++        // creation.
++        if (options.applicationEntryFile !== undefined) {
++            this._applicationEntryFile = path.join(process.cwd(), "src", options.applicationEntryFile);
++            this._applicationFileName = options.applicationEntryFile;
++        }
++        if (this._options.entryModule) {
++            this._entryModule = Array.isArray(this._options.entryModule) ?
++                this._options.entryModule : [this._options.entryModule];
++        } else if (this._compilerOptions.entryModule) {
++            if (Array.isArray(this._compilerOptions.entryModule)) {
++                this._entryModule = this._compilerOptions.entryModule.map((entryModule) => {
++                    return path.resolve(this._basePath, entryModule);
++                });
++            } else {
++                this._entryModule = [path.resolve(this._basePath, this._compilerOptions.entryModule)];
++            }
++        } else {
++            if (this._applicationEntryFile) {
++                this._entryModule = applicationEntry_resolver.resolveEntryModulesFromApplicationFile(this._applicationEntryFile);
++            }
++
++        }
++        // Set platform.
++        this._platform = options.platform || interfaces_1.PLATFORM.Browser;
++        // Make transformers.
++        this._makeTransformers();
++        benchmark_1.timeEnd('AngularCompilerPlugin._setupOptions');
++    }
++    _getTsProgram() {
++        if (!this._program) {
++            return undefined;
++        }
++        return this._JitMode ? this._program : this._program.getTsProgram();
++    }
++    updateChangedFileExtensions(extension) {
++        if (extension) {
++            this._changedFileExtensions.add(extension);
++        }
++    }
++    _getChangedCompilationFiles() {
++        return this._compilerHost.getChangedFilePaths()
++            .filter(k => {
++                for (const ext of this._changedFileExtensions) {
++                    if (k.endsWith(ext)) {
++                        return true;
++                    }
++                }
++                return false;
++            });
++    }
++    async _createOrUpdateProgram() {
++        // Get the root files from the ts config.
++        // When a new root name (like a lazy route) is added, it won't be available from
++        // following imports on the existing files, so we need to get the new list of root files.
++        const config = compiler_cli_1.readConfiguration(this._tsConfigPath);
++        this._rootNames = config.rootNames;
++        // Update the forked type checker with all changed compilation files.
++        // This includes templates, that also need to be reloaded on the type checker.
++        if (this._forkTypeChecker && this._typeCheckerProcess && !this._firstRun) {
++            this._updateForkedTypeChecker(this._rootNames, this._getChangedCompilationFiles());
++        }
++        const oldTsProgram = this._getTsProgram();
++        if (this._JitMode) {
++            // Create the TypeScript program.
++            benchmark_1.time('AngularCompilerPlugin._createOrUpdateProgram.ts.createProgram');
++            this._program = ts.createProgram(this._rootNames, this._compilerOptions, this._compilerHost, oldTsProgram);
++            benchmark_1.timeEnd('AngularCompilerPlugin._createOrUpdateProgram.ts.createProgram');
++        } else {
++            benchmark_1.time('AngularCompilerPlugin._createOrUpdateProgram.ng.createProgram');
++            // Create the Angular program.
++            this._program = compiler_cli_1.createProgram({
++                rootNames: this._rootNames,
++                options: this._compilerOptions,
++                host: this._compilerHost,
++                oldProgram: this._program,
++            });
++            benchmark_1.timeEnd('AngularCompilerPlugin._createOrUpdateProgram.ng.createProgram');
++            benchmark_1.time('AngularCompilerPlugin._createOrUpdateProgram.ng.loadNgStructureAsync');
++            await this._program.loadNgStructureAsync();
++            benchmark_1.timeEnd('AngularCompilerPlugin._createOrUpdateProgram.ng.loadNgStructureAsync');
++        }
++        const newTsProgram = this._getTsProgram();
++        if (oldTsProgram && newTsProgram) {
++            // The invalidation should only happen if we have an old program
++            // as otherwise we will invalidate all the sourcefiles.
++            const oldFiles = new Set(oldTsProgram.getSourceFiles().map(sf => sf.fileName));
++            const newFiles = newTsProgram.getSourceFiles().filter(sf => !oldFiles.has(sf.fileName));
++            for (const newFile of newFiles) {
++                this._compilerHost.invalidate(newFile.fileName);
++            }
++        }
++        // If there's still no entryModule try to resolve from mainPath.
++        if (!this._entryModule) {
++            benchmark_1.time('AngularCompilerPlugin._make.resolveEntryModuleFromMain');
++            if (this._mainPath) {
++                this._entryModule = entry_resolver_1.resolveEntryModuleFromMain(this._mainPath, this._compilerHost, this._getTsProgram());
++                if (!this.entryModule && !this._compilerOptions.enableIvy) {
++                    this._warnings.push('Lazy routes discovery is not enabled. ' +
++                        'Because there is neither an entryModule nor a ' +
++                        'statically analyzable bootstrap code in the main file.');
++                }
++                benchmark_1.timeEnd('AngularCompilerPlugin._make.resolveEntryModuleFromMain');
++            }
++            if (this._applicationEntryFile) {
++                this._entryModule = entry_resolver_1.resolveEntryModulesFromApplicationFile(this._applicationEntryFile, this._compilerHost, this._getTsProgram());
++                if (!this.entryModule && !this._compilerOptions.enableIvy) {
++                    this._warnings.push('Lazy routes discovery is not enabled. ' +
++                        'Because there is neither an entryModule nor a ' +
++                        'statically analyzable bootstrap code in the main file.');
++                }
++                benchmark_1.timeEnd('AngularCompilerPlugin._make.resolveEntryModuleFromMain');
++            }
++
++        }
++    }
++    _findLazyRoutesInAst(changedFilePaths) {
++        benchmark_1.time('AngularCompilerPlugin._findLazyRoutesInAst');
++        const result = {};
++        for (const filePath of changedFilePaths) {
++            const fileLazyRoutes = lazy_routes_1.findLazyRoutes(filePath, this._compilerHost, undefined, this._compilerOptions);
++            for (const routeKey of Object.keys(fileLazyRoutes)) {
++                const route = fileLazyRoutes[routeKey];
++                result[routeKey] = route;
++            }
++        }
++        benchmark_1.timeEnd('AngularCompilerPlugin._findLazyRoutesInAst');
++        return result;
++    }
++    _listLazyRoutesFromProgram() {
++            let entryRoute;
++            let ngProgram;
++            if (this._JitMode) {
++                if (!this.entryModule) {
++                    return {};
++                }
++                benchmark_1.time('AngularCompilerPlugin._listLazyRoutesFromProgram.createProgram');
++                ngProgram = compiler_cli_1.createProgram({
++                    rootNames: this._rootNames,
++                    options: {...this._compilerOptions, genDir: '', collectAllErrors: true },
++                    host: this._compilerHost,
++                });
++                benchmark_1.timeEnd('AngularCompilerPlugin._listLazyRoutesFromProgram.createProgram');
++                entryRoute = utils_1.workaroundResolve(this.entryModule.path) + '#' + this.entryModule.className;
++            } else {
++                ngProgram = this._program;
++            }
++            benchmark_1.time('AngularCompilerPlugin._listLazyRoutesFromProgram.listLazyRoutes');
++            // entryRoute will only be defined in JIT.
++            // In AOT all routes within the program are returned.
++            const lazyRoutes = ngProgram.listLazyRoutes(entryRoute);
++            benchmark_1.timeEnd('AngularCompilerPlugin._listLazyRoutesFromProgram.listLazyRoutes');
++            return lazyRoutes.reduce((acc, curr) => {
++                const ref = curr.route;
++                if (ref in acc && acc[ref] !== curr.referencedModule.filePath) {
++                    throw new Error(+`Duplicated path in loadChildren detected: "${ref}" is used in 2 loadChildren, ` +
++                        `but they point to different modules "(${acc[ref]} and ` +
++                        `"${curr.referencedModule.filePath}"). Webpack cannot distinguish on context and ` +
++                        'would fail to load the proper one.');
++                }
++                acc[ref] = curr.referencedModule.filePath;
++                return acc;
++            }, {});
++        }
++        // Process the lazy routes discovered, adding then to _lazyRoutes.
++        // TODO: find a way to remove lazy routes that don't exist anymore.
++        // This will require a registry of known references to a lazy route, removing it when no
++        // module references it anymore.
++    _processLazyRoutes(discoveredLazyRoutes) {
++        Object.keys(discoveredLazyRoutes)
++            .forEach(lazyRouteKey => {
++                const [lazyRouteModule, moduleName] = lazyRouteKey.split('#');
++                if (!lazyRouteModule) {
++                    return;
++                }
++                const lazyRouteTSFile = utils_1.forwardSlashPath(discoveredLazyRoutes[lazyRouteKey]);
++                let modulePath, moduleKey;
++                if (this._useFactories) {
++                    modulePath = lazyRouteTSFile.replace(/(\.d)?\.tsx?$/, '');
++                    modulePath += '.ngfactory.js';
++                    const factoryModuleName = moduleName ? `#${moduleName}NgFactory` : '';
++                    moduleKey = `${lazyRouteModule}.ngfactory${factoryModuleName}`;
++                } else {
++                    modulePath = lazyRouteTSFile;
++                    moduleKey = `${lazyRouteModule}${moduleName ? '#' + moduleName : ''}`;
++                }
++                modulePath = utils_1.workaroundResolve(modulePath);
++                if (moduleKey in this._lazyRoutes) {
++                    if (this._lazyRoutes[moduleKey] !== modulePath) {
++                        // Found a duplicate, this is an error.
++                        this._warnings.push(new Error(`Duplicated path in loadChildren detected during a rebuild. ` +
++                            `We will take the latest version detected and override it to save rebuild time. ` +
++                            `You should perform a full build to validate that your routes don't overlap.`));
++                    }
++                } else {
++                    // Found a new route, add it to the map.
++                    this._lazyRoutes[moduleKey] = modulePath;
++                }
++            });
++    }
++    _createForkedTypeChecker() {
++        // Bootstrap type checker is using local CLI.
++        const g = typeof global !== 'undefined' ? global : {}; // tslint:disable-line:no-any
++        const typeCheckerFile = g['_DevKitIsLocal'] ?
++            './type_checker_bootstrap.js' :
++            './type_checker_worker.js';
++        const debugArgRegex = /--inspect(?:-brk|-port)?|--debug(?:-brk|-port)/;
++        const execArgv = process.execArgv.filter((arg) => {
++            // Remove debug args.
++            // Workaround for https://github.com/nodejs/node/issues/9435
++            return !debugArgRegex.test(arg);
++        });
++        // Signal the process to start listening for messages
++        // Solves https://github.com/angular/angular-cli/issues/9071
++        const forkArgs = [type_checker_1.AUTO_START_ARG];
++        const forkOptions = { execArgv };
++        this._typeCheckerProcess = child_process_1.fork(path.resolve(__dirname, typeCheckerFile), forkArgs, forkOptions);
++        // Handle child messages.
++        this._typeCheckerProcess.on('message', message => {
++            switch (message.kind) {
++                case type_checker_messages_1.MESSAGE_KIND.Log:
++                    const logMessage = message;
++                    this._logger.log(logMessage.level, `\n${logMessage.message}`);
++                    break;
++                default:
++                    throw new Error(`TypeChecker: Unexpected message received: ${message}.`);
++            }
++        });
++        // Handle child process exit.
++        this._typeCheckerProcess.once('exit', (_, signal) => {
++            this._typeCheckerProcess = null;
++            // If process exited not because of SIGTERM (see _killForkedTypeChecker), than something
++            // went wrong and it should fallback to type checking on the main thread.
++            if (signal !== 'SIGTERM') {
++                this._forkTypeChecker = false;
++                const msg = 'AngularCompilerPlugin: Forked Type Checker exited unexpectedly. ' +
++                    'Falling back to type checking on main thread.';
++                this._warnings.push(msg);
++            }
++        });
++    }
++    _killForkedTypeChecker() {
++        if (this._typeCheckerProcess && this._typeCheckerProcess.pid) {
++            treeKill(this._typeCheckerProcess.pid, 'SIGTERM');
++            this._typeCheckerProcess = null;
++        }
++    }
++    _updateForkedTypeChecker(rootNames, changedCompilationFiles) {
++        if (this._typeCheckerProcess) {
++            if (!this._forkedTypeCheckerInitialized) {
++                let hostReplacementPaths = {};
++                if (this._options.hostReplacementPaths &&
++                    typeof this._options.hostReplacementPaths != 'function') {
++                    hostReplacementPaths = this._options.hostReplacementPaths;
++                }
++                this._typeCheckerProcess.send(new type_checker_messages_1.InitMessage(this._compilerOptions, this._basePath, this._JitMode, this._rootNames, hostReplacementPaths));
++                this._forkedTypeCheckerInitialized = true;
++            }
++            this._typeCheckerProcess.send(new type_checker_messages_1.UpdateMessage(rootNames, changedCompilationFiles));
++        }
++    }
++    _warnOnUnusedFiles(compilation) {
++            // Only do the unused TS files checks when under Ivy
++            // since previously we did include unused files in the compilation
++            // See: https://github.com/angular/angular-cli/pull/15030
++            if (!this._compilerOptions.enableIvy) {
++                return;
++            }
++            const program = this._getTsProgram();
++            if (!program) {
++                return;
++            }
++            // Exclude the following files from unused checks
++            // - ngfactories & ngstyle might not have a correspondent
++            //   JS file example `@angular/core/core.ngfactory.ts`.
++            // - .d.ts files might not have a correspondent JS file due to bundling.
++            // - __ng_typecheck__.ts will never be requested.
++            const fileExcludeRegExp = /(\.(d|ngfactory|ngstyle)\.ts|ng_typecheck__\.ts)$/;
++            const usedFiles = new Set();
++            for (const compilationModule of compilation.modules) {
++                if (!compilationModule.resource) {
++                    continue;
++                }
++                usedFiles.add(utils_1.forwardSlashPath(compilationModule.resource));
++                // We need the below for dependencies which
++                // are not emitted such as type only TS files
++                for (const dependency of compilationModule.buildInfo.fileDependencies) {
++                    usedFiles.add(utils_1.forwardSlashPath(dependency));
++                }
++            }
++            const sourceFiles = program.getSourceFiles();
++            for (const { fileName }
++                of sourceFiles) {
++                if (fileExcludeRegExp.test(fileName) ||
++                    usedFiles.has(fileName) ||
++                    this._unusedFiles.has(fileName)) {
++                    continue;
++                }
++                compilation.warnings.push(`${fileName} is part of the TypeScript compilation but it's unused.\n` +
++                    `Add only entry points to the 'files' or 'include' properties in your tsconfig.`);
++                this._unusedFiles.add(fileName);
++            }
++        }
++        // Registration hook for webpack plugin.
++        // tslint:disable-next-line:no-big-function
++    apply(compiler) {
++        // The below is require by NGCC processor
++        // since we need to know which fields we need to process
++        compiler.hooks.environment.tap('angular-compiler', () => {
++            const { options } = compiler;
++            const mainFields = options.resolve && options.resolve.mainFields;
++            if (mainFields) {
++                this._mainFields = utils_1.flattenArray(mainFields);
++            }
++        });
++        // cleanup if not watching
++        compiler.hooks.thisCompilation.tap('angular-compiler', compilation => {
++            compilation.hooks.finishModules.tap('angular-compiler', () => {
++                this._warnOnUnusedFiles(compilation);
++                let rootCompiler = compiler;
++                while (rootCompiler.parentCompilation) {
++                    // tslint:disable-next-line:no-any
++                    rootCompiler = compiler.parentCompilation;
++                }
++                // only present for webpack 4.23.0+, assume true otherwise
++                const watchMode = rootCompiler.watchMode === undefined ? true : rootCompiler.watchMode;
++                if (!watchMode) {
++                    this._program = null;
++                    this._transformers = [];
++                    this._resourceLoader = undefined;
++                    this._compilerHost.reset();
++                }
++            });
++        });
++        // Decorate inputFileSystem to serve contents of CompilerHost.
++        // Use decorated inputFileSystem in watchFileSystem.
++        compiler.hooks.environment.tap('angular-compiler', () => {
++            // The webpack types currently do not include these
++            const compilerWithFileSystems = compiler;
++            let host = this._options.host || new webpack_input_host_1.WebpackInputHost(compilerWithFileSystems.inputFileSystem);
++            let replacements;
++            if (this._options.hostReplacementPaths) {
++                if (typeof this._options.hostReplacementPaths == 'function') {
++                    const replacementResolver = this._options.hostReplacementPaths;
++                    replacements = path => core_1.normalize(replacementResolver(core_1.getSystemPath(path)));
++                    host = new class extends core_1.virtualFs.ResolverHost {
++                        _resolve(path) {
++                            return core_1.normalize(replacementResolver(core_1.getSystemPath(path)));
++                        }
++                    }(host);
++                } else {
++                    replacements = new Map();
++                    const aliasHost = new core_1.virtualFs.AliasHost(host);
++                    for (const from in this._options.hostReplacementPaths) {
++                        const normalizedFrom = core_1.resolve(core_1.normalize(this._basePath), core_1.normalize(from));
++                        const normalizedWith = core_1.resolve(core_1.normalize(this._basePath), core_1.normalize(this._options.hostReplacementPaths[from]));
++                        aliasHost.aliases.set(normalizedFrom, normalizedWith);
++                        replacements.set(normalizedFrom, normalizedWith);
++                    }
++                    host = aliasHost;
++                }
++            }
++            let ngccProcessor;
++            if (this._compilerOptions.enableIvy) {
++                ngccProcessor = new ngcc_processor_1.NgccProcessor(this._mainFields, compilerWithFileSystems.inputFileSystem, this._warnings, this._errors, this._basePath, this._compilerOptions);
++            }
++            // Use an identity function as all our paths are absolute already.
++            this._moduleResolutionCache = ts.createModuleResolutionCache(this._basePath, x => x);
++            // Create the webpack compiler host.
++            const webpackCompilerHost = new compiler_host_1.WebpackCompilerHost(this._compilerOptions, this._basePath, host, true, this._options.directTemplateLoading, ngccProcessor, this._moduleResolutionCache);
++            // Create and set a new WebpackResourceLoader in AOT
++            if (!this._JitMode) {
++                this._resourceLoader = new resource_loader_1.WebpackResourceLoader();
++                webpackCompilerHost.setResourceLoader(this._resourceLoader);
++            }
++            // Use the WebpackCompilerHost with a resource loader to create an AngularCompilerHost.
++            this._compilerHost = compiler_cli_1.createCompilerHost({
++                options: this._compilerOptions,
++                tsHost: webpackCompilerHost,
++            });
++            // Resolve mainPath if provided.
++            if (this._options.mainPath) {
++                this._mainPath = this._compilerHost.resolve(this._options.mainPath);
++            }
++            const inputDecorator = new virtual_file_system_decorator_1.VirtualFileSystemDecorator(compilerWithFileSystems.inputFileSystem, this._compilerHost);
++            compilerWithFileSystems.inputFileSystem = inputDecorator;
++            compilerWithFileSystems.watchFileSystem = new virtual_file_system_decorator_1.VirtualWatchFileSystemDecorator(inputDecorator, replacements);
++        });
++        if (this._discoverLazyRoutes) {
++            // Add lazy modules to the context module for @angular/core
++            compiler.hooks.contextModuleFactory.tap('angular-compiler', cmf => {
++                const angularCorePackagePath = require.resolve('@angular/core/package.json');
++                // APFv6 does not have single FESM anymore. Instead of verifying if we're pointing to
++                // FESMs, we resolve the `@angular/core` path and verify that the path for the
++                // module starts with it.
++                // This may be slower but it will be compatible with both APF5, 6 and potential future
++                // versions (until the dynamic import appears outside of core I suppose).
++                // We resolve symbolic links in order to get the real path that would be used in webpack.
++                const angularCoreResourceRoot = fs.realpathSync(path.dirname(angularCorePackagePath));
++                cmf.hooks.afterResolve.tapPromise('angular-compiler', async(result) => {
++                    // Alter only existing request from Angular or the additional lazy module resources.
++                    const isLazyModuleResource = (resource) => resource.startsWith(angularCoreResourceRoot) ||
++                        (this.options.additionalLazyModuleResources &&
++                            this.options.additionalLazyModuleResources.includes(resource));
++                    if (!result || !this.done || !isLazyModuleResource(result.resource)) {
++                        return result;
++                    }
++                    await this.done;
++                    // This folder does not exist, but we need to give webpack a resource.
++                    // TODO: check if we can't just leave it as is (angularCoreModuleDir).
++                    result.resource = path.join(this._basePath, '$$_lazy_route_resource');
++                    // tslint:disable-next-line:no-any
++                    result.dependencies.forEach((d) => d.critical = false);
++                    // tslint:disable-next-line:no-any
++                    result.resolveDependencies = (_fs, options, callback) => {
++                        const dependencies = Object.keys(this._lazyRoutes)
++                            .map((key) => {
++                                const modulePath = this._lazyRoutes[key];
++                                if (modulePath !== null) {
++                                    const name = key.split('#')[0];
++                                    return new this._contextElementDependencyConstructor(modulePath, name);
++                                } else {
++                                    return null;
++                                }
++                            })
++                            .filter(x => !!x);
++                        if (this._options.nameLazyFiles) {
++                            options.chunkName = '[request]';
++                        }
++                        callback(null, dependencies);
++                    };
++                    return result;
++                });
++            });
++        }
++        // Create and destroy forked type checker on watch mode.
++        compiler.hooks.watchRun.tap('angular-compiler', () => {
++            if (this._forkTypeChecker && !this._typeCheckerProcess) {
++                this._createForkedTypeChecker();
++            }
++        });
++        compiler.hooks.watchClose.tap('angular-compiler', () => this._killForkedTypeChecker());
++        // Remake the plugin on each compilation.
++        compiler.hooks.make.tapPromise('angular-compiler', compilation => this._donePromise = this._make(compilation));
++        compiler.hooks.invalid.tap('angular-compiler', () => this._firstRun = false);
++        compiler.hooks.afterEmit.tap('angular-compiler', compilation => {
++            // tslint:disable-next-line:no-any
++            compilation._ngToolsWebpackPluginInstance = null;
++        });
++        compiler.hooks.done.tap('angular-compiler', () => {
++            this._donePromise = null;
++        });
++        compiler.hooks.afterResolvers.tap('angular-compiler', compiler => {
++            if (this._compilerOptions.enableIvy) {
++                // When Ivy is enabled we need to add the fields added by NGCC
++                // to take precedence over the provided mainFields.
++                // NGCC adds fields in package.json suffixed with '_ivy_ngcc'
++                // Example: module -> module__ivy_ngcc
++                // tslint:disable-next-line:no-any
++                compiler.resolverFactory.hooks.resolveOptions
++                    .for('normal')
++                    // tslint:disable-next-line:no-any
++                    .tap('WebpackOptionsApply', (resolveOptions) => {
++                        const mainFields = resolveOptions.mainFields
++                            .map(f => [`${f}_ivy_ngcc`, f]);
++                        return {
++                            ...resolveOptions,
++                            mainFields: utils_1.flattenArray(mainFields),
++                        };
++                    });
++            }
++            // tslint:disable-next-line:no-any
++            compiler.resolverFactory.hooks.resolver
++                .for('normal')
++                // tslint:disable-next-line:no-any
++                .tap('angular-compiler', (resolver) => {
++                    new paths_plugin_1.TypeScriptPathsPlugin(this._compilerOptions).apply(resolver);
++                });
++            compiler.hooks.normalModuleFactory.tap('angular-compiler', nmf => {
++                // Virtual file system.
++                // TODO: consider if it's better to remove this plugin and instead make it wait on the
++                // VirtualFileSystemDecorator.
++                // Wait for the plugin to be done when requesting `.ts` files directly (entry points), or
++                // when the issuer is a `.ts` or `.ngfactory.js` file.
++                nmf.hooks.beforeResolve.tapPromise('angular-compiler', async(request) => {
++                    if (this.done && request) {
++                        const name = request.request;
++                        const issuer = request.contextInfo.issuer;
++                        if (name.endsWith('.ts') || name.endsWith('.tsx') ||
++                            (issuer && /\.ts|ngfactory\.js$/.test(issuer))) {
++                            try {
++                                await this.done;
++                            } catch (_a) {}
++                        }
++                    }
++                    return request;
++                });
++            });
++        });
++    }
++    async _make(compilation) {
++        benchmark_1.time('AngularCompilerPlugin._make');
++        // tslint:disable-next-line:no-any
++        if (compilation._ngToolsWebpackPluginInstance) {
++            throw new Error('An @ngtools/webpack plugin already exist for this compilation.');
++        }
++        // If there is no compiler host at this point, it means that the environment hook did not run.
++        // This happens in child compilations that inherit the parent compilation file system.
++        // Node: child compilations also do not run most webpack compiler hooks, including almost all
++        // we use here. The child compiler will always run as if it was the first build.
++        if (this._compilerHost === undefined) {
++            const inputFs = compilation.compiler.inputFileSystem;
++            if (!inputFs.getWebpackCompilerHost) {
++                throw new Error('AngularCompilerPlugin is running in a child compilation, but could' +
++                    'not find a WebpackCompilerHost in the parent compilation.');
++            }
++            // Use the existing WebpackCompilerHost to ensure builds and rebuilds work.
++            this._compilerHost = compiler_cli_1.createCompilerHost({
++                options: this._compilerOptions,
++                tsHost: inputFs.getWebpackCompilerHost(),
++            });
++        }
++        // Set a private variable for this plugin instance.
++        // tslint:disable-next-line:no-any
++        compilation._ngToolsWebpackPluginInstance = this;
++        // Update the resource loader with the new webpack compilation.
++        if (this._resourceLoader) {
++            this._resourceLoader.update(compilation);
++        }
++        try {
++            await this._update();
++            this.pushCompilationErrors(compilation);
++        } catch (err) {
++            compilation.errors.push(err);
++            this.pushCompilationErrors(compilation);
++        }
++        benchmark_1.timeEnd('AngularCompilerPlugin._make');
++    }
++    pushCompilationErrors(compilation) {
++        compilation.errors.push(...this._errors);
++        compilation.warnings.push(...this._warnings);
++        this._errors = [];
++        this._warnings = [];
++    }
++    _makeTransformers() {
++        const isAppPath = (fileName) => {
++            if (fileName.endsWith('.ngfactory.ts') || fileName.endsWith('.ngstyle.ts')) {
++                return false;
++            }
++            return fileName.indexOf(this._applicationFileName) >= 0 || fileName.indexOf("__build") >= 0;
++        }
++        const isMainPath = (fileName) => fileName === (this._mainPath ? utils_1.workaroundResolve(this._mainPath) : this._mainPath);
++        const getEntryModule = (i) => () => this.entryModule[i];
++        let entryModulesIdxs = Array.from(
++            Array(this.entryModule ? this.entryModule.length : 0).keys()
++        );
++        if (global.EventEmitter){
++            global.EventEmitter.on('modulesUpdated', function(){
++                if (self._entryModule && self._entryModule.length > 0) return ; 
++
++                self._entryModule = self.entryModulesFromPlugin; 
++                entryModulesIdxs = Array.from(
++                    Array(self.entryModule ? self.entryModule.length : 0).keys()
++                );
++            });
++        }
++        const getLazyRoutes = () => this._lazyRoutes;
++        const getTypeChecker = () => this._getTsProgram().getTypeChecker();
++        if (this._JitMode) {
++            // Replace resources in JIT.
++            this._transformers.push(transformers_1.replaceResources(isAppPath, getTypeChecker, this._options.directTemplateLoading));
++            // Downlevel constructor parameters for DI support
++            // This is required to support forwardRef in ES2015 due to TDZ issues
++            this._transformers.push(ctor_parameters_1.downlevelConstructorParameters(getTypeChecker));
++        } else {
++            // Remove unneeded angular decorators.
++            this._transformers.push(transformers_1.removeDecorators(isAppPath, getTypeChecker));
++            // Import ngfactory in loadChildren import syntax
++            if (this._useFactories) {
++                // Only transform imports to use factories with View Engine.
++                this._transformers.push(transformers_1.importFactory(msg => this._warnings.push(msg), getTypeChecker));
++            }
++        }
++        if (this._platformTransformers !== null) {
++            this._transformers.push(...this._platformTransformers);
++        } else {
++            if (this._platform === interfaces_1.PLATFORM.Browser) {
++                // If we have a locale, auto import the locale data file.
++                // This transform must go before replaceBootstrap because it looks for the entry module
++                // import, which will be replaced.
++                if (this._normalizedLocale) {
++                    this._transformers.push(transformers_1.registerLocaleData(isAppPath, getEntryModule, this._normalizedLocale));
++                }
++                if (!this._JitMode) {
++                    var self = this;
++                    // Replace bootstrap in browser non JIT Mode.
++                    entryModulesIdxs.forEach((idx) => {
++                        self._transformers.push(transformers_2.replaceNgModules(isAppPath, getEntryModule(idx), getTypeChecker));
++                    });
++                }
++            } else if (this._platform === PLATFORM.Server) {
++                this._transformers.push(transformers_1.exportLazyModuleMap(isMainPath, getLazyRoutes));
++                if (this._useFactories) {
++                    let self = this;
++                    entryModulesIdxs.forEach((idx) => {
++                        this._transformers.push(transformers_1.exportNgFactory(isMainPath, getEntryModule(idx)), transformers_1.replaceServerBootstrap(isMainPath, getEntryModule(idx), getTypeChecker));
++                    });
++                }
++            }
++        }
++    }
++    _getChangedTsFiles() {
++        return this._getChangedCompilationFiles()
++            .filter(k => (k.endsWith('.ts') || k.endsWith('.tsx')) && !k.endsWith('.d.ts'))
++            .filter(k => this._compilerHost.fileExists(k));
++    }
++    async _update() {
++        benchmark_1.time('AngularCompilerPlugin._update');
++        // We only want to update on TS and template changes, but all kinds of files are on this
++        // list, like package.json and .ngsummary.json files.
++        const changedFiles = this._getChangedCompilationFiles();
++        // If nothing we care about changed and it isn't the first run, don't do anything.
++        if (changedFiles.length === 0 && !this._firstRun) {
++            return;
++        }
++        // Make a new program and load the Angular structure.
++        await this._createOrUpdateProgram();
++        if (this._discoverLazyRoutes) {
++            // Try to find lazy routes if we have an entry module.
++            // We need to run the `listLazyRoutes` the first time because it also navigates libraries
++            // and other things that we might miss using the (faster) findLazyRoutesInAst.
++            // Lazy routes modules will be read with compilerHost and added to the changed files.
++            let lazyRouteMap = {};
++            if (!this._JitMode || this._firstRun) {
++                lazyRouteMap = this._listLazyRoutesFromProgram();
++            } else {
++                const changedTsFiles = this._getChangedTsFiles();
++                if (changedTsFiles.length > 0) {
++                    lazyRouteMap = this._findLazyRoutesInAst(changedTsFiles);
++                }
++            }
++            // Find lazy routes
++            lazyRouteMap = {
++                ...lazyRouteMap,
++                ...this._options.additionalLazyModules,
++            };
++            this._processLazyRoutes(lazyRouteMap);
++        }
++        // Emit files.
++        benchmark_1.time('AngularCompilerPlugin._update._emit');
++        const { emitResult, diagnostics } = this._emit();
++        benchmark_1.timeEnd('AngularCompilerPlugin._update._emit');
++        // Report Diagnostics
++        const tsErrors = [];
++        const tsWarnings = [];
++        const ngErrors = [];
++        const ngWarnings = [];
++        for (const diagnostic of diagnostics) {
++            switch (diagnostic.category) {
++                case ts.DiagnosticCategory.Error:
++                    if (compiler_cli_1.isNgDiagnostic(diagnostic)) {
++                        ngErrors.push(diagnostic);
++                    } else {
++                        tsErrors.push(diagnostic);
++                    }
++                    break;
++                case ts.DiagnosticCategory.Message:
++                case ts.DiagnosticCategory.Suggestion:
++                    // Warnings?
++                case ts.DiagnosticCategory.Warning:
++                    if (compiler_cli_1.isNgDiagnostic(diagnostic)) {
++                        ngWarnings.push(diagnostic);
++                    } else {
++                        tsWarnings.push(diagnostic);
++                    }
++                    break;
++            }
++        }
++        if (tsErrors.length > 0) {
++            const message = ts.formatDiagnosticsWithColorAndContext(tsErrors, this._compilerHost);
++            this._errors.push(new Error(message));
++        }
++        if (tsWarnings.length > 0) {
++            const message = ts.formatDiagnosticsWithColorAndContext(tsWarnings, this._compilerHost);
++            this._warnings.push(message);
++        }
++        if (ngErrors.length > 0) {
++            const message = compiler_cli_1.formatDiagnostics(ngErrors);
++            this._errors.push(new Error(message));
++        }
++        if (ngWarnings.length > 0) {
++            const message = compiler_cli_1.formatDiagnostics(ngWarnings);
++            this._warnings.push(message);
++        }
++        this._emitSkipped = !emitResult || emitResult.emitSkipped;
++        // Reset changed files on successful compilation.
++        if (!this._emitSkipped && this._errors.length === 0) {
++            this._compilerHost.resetChangedFileTracker();
++        }
++        benchmark_1.timeEnd('AngularCompilerPlugin._update');
++    }
++    writeI18nOutFile() {
++        function _recursiveMkDir(p) {
++            if (!fs.existsSync(p)) {
++                _recursiveMkDir(path.dirname(p));
++                fs.mkdirSync(p);
++            }
++        }
++        // Write the extracted messages to disk.
++        if (this._compilerOptions.i18nOutFile) {
++            const i18nOutFilePath = path.resolve(this._basePath, this._compilerOptions.i18nOutFile);
++            const i18nOutFileContent = this._compilerHost.readFile(i18nOutFilePath);
++            if (i18nOutFileContent) {
++                _recursiveMkDir(path.dirname(i18nOutFilePath));
++                fs.writeFileSync(i18nOutFilePath, i18nOutFileContent);
++            }
++        }
++    }
++    getCompiledFile(fileName) {
++        const outputFile = fileName.replace(/.tsx?$/, '.js');
++        let outputText;
++        let sourceMap;
++        let errorDependencies = [];
++        if (this._emitSkipped) {
++            const text = this._compilerHost.readFile(outputFile);
++            if (text) {
++                // If the compilation didn't emit files this time, try to return the cached files from the
++                // last compilation and let the compilation errors show what's wrong.
++                outputText = text;
++                sourceMap = this._compilerHost.readFile(outputFile + '.map');
++            } else {
++                // There's nothing we can serve. Return an empty string to prevent lenghty webpack errors,
++                // add the rebuild warning if it's not there yet.
++                // We also need to all changed files as dependencies of this file, so that all of them
++                // will be watched and trigger a rebuild next time.
++                outputText = '';
++                const program = this._getTsProgram();
++                errorDependencies = (program ? program.getSourceFiles().map(x => x.fileName) : [])
++                    // These paths are used by the loader so we must denormalize them.
++                    .map((p) => this._compilerHost.denormalizePath(p));
++            }
++        } else {
++            // Check if the TS input file and the JS output file exist.
++            if (((fileName.endsWith('.ts') || fileName.endsWith('.tsx')) &&
++                    !this._compilerHost.fileExists(fileName)) ||
++                !this._compilerHost.fileExists(outputFile, false)) {
++                let msg = `${fileName} is missing from the TypeScript compilation. ` +
++                    `Please make sure it is in your tsconfig via the 'files' or 'include' property.`;
++                if (/(\\|\/)node_modules(\\|\/)/.test(fileName)) {
++                    msg += '\nThe missing file seems to be part of a third party library. ' +
++                        'TS files in published libraries are often a sign of a badly packaged library. ' +
++                        'Please open an issue in the library repository to alert its author and ask them ' +
++                        'to package the library using the Angular Package Format (https://goo.gl/jB3GVv).';
++                }
++                throw new Error(msg);
++            }
++            outputText = this._compilerHost.readFile(outputFile) || '';
++            sourceMap = this._compilerHost.readFile(outputFile + '.map');
++        }
++        return { outputText, sourceMap, errorDependencies };
++    }
++    getDependencies(fileName) {
++        const resolvedFileName = this._compilerHost.resolve(fileName);
++        const sourceFile = this._compilerHost.getSourceFile(resolvedFileName, ts.ScriptTarget.Latest);
++        if (!sourceFile) {
++            return [];
++        }
++        const options = this._compilerOptions;
++        const host = this._compilerHost;
++        const cache = this._moduleResolutionCache;
++        const esImports = ast_helpers_1.collectDeepNodes(sourceFile, [
++                ts.SyntaxKind.ImportDeclaration,
++                ts.SyntaxKind.ExportDeclaration,
++            ])
++            .map(decl => {
++                if (!decl.moduleSpecifier) {
++                    return null;
++                }
++                const moduleName = decl.moduleSpecifier.text;
++                const resolved = ts.resolveModuleName(moduleName, resolvedFileName, options, host, cache);
++                if (resolved.resolvedModule) {
++                    return resolved.resolvedModule.resolvedFileName;
++                } else {
++                    return null;
++                }
++            })
++            .filter(x => x);
++        const resourceImports = transformers_1.findResources(sourceFile)
++            .map(resourcePath => core_1.resolve(core_1.dirname(resolvedFileName), core_1.normalize(resourcePath)));
++        // These paths are meant to be used by the loader so we must denormalize them.
++        const uniqueDependencies = new Set([
++            ...esImports,
++            ...resourceImports,
++            ...this.getResourceDependencies(this._compilerHost.denormalizePath(resolvedFileName)),
++        ].map((p) => p && this._compilerHost.denormalizePath(p)));
++        return [...uniqueDependencies];
++    }
++    getResourceDependencies(fileName) {
++            if (!this._resourceLoader) {
++                return [];
++            }
++            return this._resourceLoader.getResourceDependencies(fileName);
++        }
++        // This code mostly comes from `performCompilation` in `@angular/compiler-cli`.
++        // It skips the program creation because we need to use `loadNgStructureAsync()`,
++        // and uses CustomTransformers.
++    _emit() {
++        benchmark_1.time('AngularCompilerPlugin._emit');
++        const program = this._program;
++        const allDiagnostics = [];
++        const diagMode = (this._firstRun || !this._forkTypeChecker) ?
++            gather_diagnostics_1.DiagnosticMode.All : gather_diagnostics_1.DiagnosticMode.Syntactic;
++        let emitResult;
++        try {
++            if (this._JitMode) {
++                const tsProgram = program;
++                const changedTsFiles = new Set();
++                if (this._firstRun) {
++                    // Check parameter diagnostics.
++                    benchmark_1.time('AngularCompilerPlugin._emit.ts.getOptionsDiagnostics');
++                    allDiagnostics.push(...tsProgram.getOptionsDiagnostics());
++                    benchmark_1.timeEnd('AngularCompilerPlugin._emit.ts.getOptionsDiagnostics');
++                } else {
++                    // generate a list of changed files for emit
++                    // not needed on first run since a full program emit is required
++                    for (const changedFile of this._compilerHost.getChangedFilePaths()) {
++                        if (!/.(tsx|ts|json|js)$/.test(changedFile)) {
++                            continue;
++                        }
++                        // existing type definitions are not emitted
++                        if (changedFile.endsWith('.d.ts')) {
++                            continue;
++                        }
++                        changedTsFiles.add(changedFile);
++                    }
++                }
++                allDiagnostics.push(...gather_diagnostics_1.gatherDiagnostics(tsProgram, this._JitMode, 'AngularCompilerPlugin._emit.ts', diagMode));
++                if (!gather_diagnostics_1.hasErrors(allDiagnostics)) {
++                    if (this._firstRun || changedTsFiles.size > 20 || !this._hadFullJitEmit) {
++                        emitResult = tsProgram.emit(undefined, undefined, undefined, undefined, { before: this._transformers });
++                        this._hadFullJitEmit = !emitResult.emitSkipped;
++                        allDiagnostics.push(...emitResult.diagnostics);
++                    } else {
++                        for (const changedFile of changedTsFiles) {
++                            const sourceFile = tsProgram.getSourceFile(changedFile);
++                            if (!sourceFile) {
++                                continue;
++                            }
++                            const timeLabel = `AngularCompilerPlugin._emit.ts+${sourceFile.fileName}+.emit`;
++                            benchmark_1.time(timeLabel);
++                            emitResult = tsProgram.emit(sourceFile, undefined, undefined, undefined, { before: this._transformers });
++                            allDiagnostics.push(...emitResult.diagnostics);
++                            benchmark_1.timeEnd(timeLabel);
++                        }
++                    }
++                }
++            } else {
++                const angularProgram = program;
++                // Check Angular structural diagnostics.
++                benchmark_1.time('AngularCompilerPlugin._emit.ng.getNgStructuralDiagnostics');
++                allDiagnostics.push(...angularProgram.getNgStructuralDiagnostics());
++                benchmark_1.timeEnd('AngularCompilerPlugin._emit.ng.getNgStructuralDiagnostics');
++                if (this._firstRun) {
++                    // Check TypeScript parameter diagnostics.
++                    benchmark_1.time('AngularCompilerPlugin._emit.ng.getTsOptionDiagnostics');
++                    allDiagnostics.push(...angularProgram.getTsOptionDiagnostics());
++                    benchmark_1.timeEnd('AngularCompilerPlugin._emit.ng.getTsOptionDiagnostics');
++                    // Check Angular parameter diagnostics.
++                    benchmark_1.time('AngularCompilerPlugin._emit.ng.getNgOptionDiagnostics');
++                    allDiagnostics.push(...angularProgram.getNgOptionDiagnostics());
++                    benchmark_1.timeEnd('AngularCompilerPlugin._emit.ng.getNgOptionDiagnostics');
++                }
++                allDiagnostics.push(...gather_diagnostics_1.gatherDiagnostics(angularProgram, this._JitMode, 'AngularCompilerPlugin._emit.ng', diagMode));
++                if (!gather_diagnostics_1.hasErrors(allDiagnostics)) {
++                    benchmark_1.time('AngularCompilerPlugin._emit.ng.emit');
++                    const extractI18n = !!this._compilerOptions.i18nOutFile;
++                    const emitFlags = extractI18n ? compiler_cli_1.EmitFlags.I18nBundle : compiler_cli_1.EmitFlags.Default;
++                    emitResult = angularProgram.emit({
++                        emitFlags,
++                        customTransformers: {
++                            beforeTs: this._transformers,
++                        },
++                    });
++                    allDiagnostics.push(...emitResult.diagnostics);
++                    if (extractI18n) {
++                        this.writeI18nOutFile();
++                    }
++                    benchmark_1.timeEnd('AngularCompilerPlugin._emit.ng.emit');
++                }
++            }
++        } catch (e) {
++            benchmark_1.time('AngularCompilerPlugin._emit.catch');
++            // This function is available in the import below, but this way we avoid the dependency.
++            // import { isSyntaxError } from '@angular/compiler';
++            function isSyntaxError(error) {
++                return error['ngSyntaxError']; // tslint:disable-line:no-any
++            }
++            let errMsg;
++            let code;
++            if (isSyntaxError(e)) {
++                // don't report the stack for syntax errors as they are well known errors.
++                errMsg = e.message;
++                code = compiler_cli_1.DEFAULT_ERROR_CODE;
++            } else {
++                errMsg = e.stack;
++                // It is not a syntax error we might have a program with unknown state, discard it.
++                this._program = null;
++                code = compiler_cli_1.UNKNOWN_ERROR_CODE;
++            }
++            allDiagnostics.push({ category: ts.DiagnosticCategory.Error, messageText: errMsg, code, source: compiler_cli_1.SOURCE });
++            benchmark_1.timeEnd('AngularCompilerPlugin._emit.catch');
++        }
++        benchmark_1.timeEnd('AngularCompilerPlugin._emit');
++        return { program, emitResult, diagnostics: allDiagnostics };
++    }
++    _validateLocale(locale) {
++        // Get the path of the common module.
++        const commonPath = path.dirname(require.resolve('@angular/common/package.json'));
++        // Check if the locale file exists
++        if (!fs.existsSync(path.resolve(commonPath, 'locales', `${locale}.js`))) {
++            // Check for an alternative locale (if the locale id was badly formatted).
++            const locales = fs.readdirSync(path.resolve(commonPath, 'locales'))
++                .filter(file => file.endsWith('.js'))
++                .map(file => file.replace('.js', ''));
++            let newLocale;
++            const normalizedLocale = locale.toLowerCase().replace(/_/g, '-');
++            for (const l of locales) {
++                if (l.toLowerCase() === normalizedLocale) {
++                    newLocale = l;
++                    break;
++                }
++            }
++            if (newLocale) {
++                locale = newLocale;
++            } else {
++                // Check for a parent locale
++                const parentLocale = normalizedLocale.split('-')[0];
++                if (locales.indexOf(parentLocale) !== -1) {
++                    locale = parentLocale;
++                } else {
++                    this._warnings.push(`AngularCompilerPlugin: Unable to load the locale data file ` +
++                        `"@angular/common/locales/${locale}", ` +
++                        `please check that "${locale}" is a valid locale id.
++            If needed, you can use "registerLocaleData" manually.`);
++                    return null;
++                }
++            }
++        }
++        return locale;
++    }
++}
++exports.FxPAngularCompilerPlugin = AngularCompilerPlugin;
+\ No newline at end of file
+--- a/node_modules/@ngtools/webpack/src/loader.js
++++ b/node_modules/@ngtools/webpack/src/loader.js
+@@ -14,6 +14,7 @@ const path = require("path");
+ const angular_compiler_plugin_1 = require("./angular_compiler_plugin");
+ const benchmark_1 = require("./benchmark");
+ const sourceMappingUrlRe = /^\/\/# sourceMappingURL=[^\r\n]*/gm;
++
+ function ngcLoader() {
+     const cb = this.async();
+     const sourceFileName = this.resourcePath;
+@@ -24,74 +25,75 @@ function ngcLoader() {
+     benchmark_1.time(timeLabel);
+     const plugin = this._compilation._ngToolsWebpackPluginInstance;
+     if (!plugin) {
+-        throw new Error('The AngularCompilerPlugin was not found. '
+-            + 'The @ngtools/webpack loader requires the plugin.');
++        throw new Error('The AngularCompilerPlugin was not found. ' +
++            'The @ngtools/webpack loader requires the plugin.');
+     }
+     // We must verify that the plugin is an instance of the right class.
+     // Throw an error if it isn't, that often means multiple @ngtools/webpack installs.
+-    if (!(plugin instanceof angular_compiler_plugin_1.AngularCompilerPlugin) || !plugin.done) {
+-        throw new Error('Angular Compiler was detected but it was an instance of the wrong class.\n'
+-            + 'This likely means you have several @ngtools/webpack packages installed. '
+-            + 'You can check this with `npm ls @ngtools/webpack`, and then remove the extra copies.');
++    //if (!(plugin instanceof angular_compiler_plugin_1.AngularCompilerPlugin) || !plugin.done) {
++    if (!(plugin.constructor.name === "AngularCompilerPlugin") || !plugin.done) {
++        throw new Error('Angular Compiler was detected but it was an instance of the wrong class.\n' +
++            'This likely means you have several @ngtools/webpack packages installed. ' +
++            'You can check this with `npm ls @ngtools/webpack`, and then remove the extra copies.');
+     }
+     benchmark_1.time(timeLabel + '.ngcLoader.AngularCompilerPlugin');
+     plugin.done
+         .then(() => {
+-        benchmark_1.timeEnd(timeLabel + '.ngcLoader.AngularCompilerPlugin');
+-        const result = plugin.getCompiledFile(sourceFileName);
+-        if (result.sourceMap) {
+-            // Process sourcemaps for Webpack.
+-            // Remove the sourceMappingURL.
+-            result.outputText = result.outputText.replace(sourceMappingUrlRe, '');
+-            // Set the map source to use the full path of the file.
+-            const sourceMap = JSON.parse(result.sourceMap);
+-            sourceMap.sources = sourceMap.sources.map((fileName) => {
+-                return path.join(path.dirname(sourceFileName), fileName);
+-            });
+-            result.sourceMap = sourceMap;
+-        }
+-        // Manually add the dependencies for TS files.
+-        // Type only imports will be stripped out by compilation so we need to add them as
+-        // as dependencies.
+-        // Component resources files (html and css templates) also need to be added manually for
+-        // AOT, so that this file is reloaded when they change.
+-        if (sourceFileName.endsWith('.ts')) {
+-            result.errorDependencies.forEach(dep => this.addDependency(dep));
+-            const dependencies = plugin.getDependencies(sourceFileName);
+-            dependencies
+-                .filter(d => d.endsWith('index.ts'))
+-                .forEach(d => dependencies.push(...plugin.getDependencies(d)));
+-            [...new Set(dependencies)].forEach(dep => {
+-                plugin.updateChangedFileExtensions(path.extname(dep));
+-                this.addDependency(dep);
+-            });
+-        }
+-        // NgFactory files depend on the component template, but we can't know what that file
+-        // is (if any). So we add all the dependencies that the original component file has
+-        // to the factory as well, which includes html and css templates, and the component
+-        // itself (for inline html/templates templates).
+-        const ngFactoryRe = /\.ngfactory.js$/;
+-        if (ngFactoryRe.test(sourceFileName)) {
+-            const originalFile = sourceFileName.replace(ngFactoryRe, '.ts');
+-            this.addDependency(originalFile);
+-            const origDependencies = plugin.getDependencies(originalFile);
+-            origDependencies.forEach(dep => this.addDependency(dep));
+-        }
+-        // NgStyle files depend on the style file they represent.
+-        // E.g. `some-style.less.shim.ngstyle.js` depends on `some-style.less`.
+-        // Those files can in turn depend on others, so we have to add them all.
+-        const ngStyleRe = /(?:\.shim)?\.ngstyle\.js$/;
+-        if (ngStyleRe.test(sourceFileName)) {
+-            const styleFile = sourceFileName.replace(ngStyleRe, '');
+-            const styleDependencies = plugin.getResourceDependencies(styleFile);
+-            styleDependencies.forEach(dep => this.addDependency(dep));
+-        }
+-        benchmark_1.timeEnd(timeLabel);
+-        cb(null, result.outputText, result.sourceMap);
+-    })
++            benchmark_1.timeEnd(timeLabel + '.ngcLoader.AngularCompilerPlugin');
++            const result = plugin.getCompiledFile(sourceFileName);
++            if (result.sourceMap) {
++                // Process sourcemaps for Webpack.
++                // Remove the sourceMappingURL.
++                result.outputText = result.outputText.replace(sourceMappingUrlRe, '');
++                // Set the map source to use the full path of the file.
++                const sourceMap = JSON.parse(result.sourceMap);
++                sourceMap.sources = sourceMap.sources.map((fileName) => {
++                    return path.join(path.dirname(sourceFileName), fileName);
++                });
++                result.sourceMap = sourceMap;
++            }
++            // Manually add the dependencies for TS files.
++            // Type only imports will be stripped out by compilation so we need to add them as
++            // as dependencies.
++            // Component resources files (html and css templates) also need to be added manually for
++            // AOT, so that this file is reloaded when they change.
++            if (sourceFileName.endsWith('.ts')) {
++                result.errorDependencies.forEach(dep => this.addDependency(dep));
++                const dependencies = plugin.getDependencies(sourceFileName);
++                dependencies
++                    .filter(d => d.endsWith('index.ts'))
++                    .forEach(d => dependencies.push(...plugin.getDependencies(d)));
++                [...new Set(dependencies)].forEach(dep => {
++                    plugin.updateChangedFileExtensions(path.extname(dep));
++                    this.addDependency(dep);
++                });
++            }
++            // NgFactory files depend on the component template, but we can't know what that file
++            // is (if any). So we add all the dependencies that the original component file has
++            // to the factory as well, which includes html and css templates, and the component
++            // itself (for inline html/templates templates).
++            const ngFactoryRe = /\.ngfactory.js$/;
++            if (ngFactoryRe.test(sourceFileName)) {
++                const originalFile = sourceFileName.replace(ngFactoryRe, '.ts');
++                this.addDependency(originalFile);
++                const origDependencies = plugin.getDependencies(originalFile);
++                origDependencies.forEach(dep => this.addDependency(dep));
++            }
++            // NgStyle files depend on the style file they represent.
++            // E.g. `some-style.less.shim.ngstyle.js` depends on `some-style.less`.
++            // Those files can in turn depend on others, so we have to add them all.
++            const ngStyleRe = /(?:\.shim)?\.ngstyle\.js$/;
++            if (ngStyleRe.test(sourceFileName)) {
++                const styleFile = sourceFileName.replace(ngStyleRe, '');
++                const styleDependencies = plugin.getResourceDependencies(styleFile);
++                styleDependencies.forEach(dep => this.addDependency(dep));
++            }
++            benchmark_1.timeEnd(timeLabel);
++            cb(null, result.outputText, result.sourceMap);
++        })
+         .catch(err => {
+-        benchmark_1.timeEnd(timeLabel);
+-        cb(err);
+-    });
++            benchmark_1.timeEnd(timeLabel);
++            cb(err);
++        });
+ }
+ exports.ngcLoader = ngcLoader;
+\ No newline at end of file
+new file mode 100644
+--- /dev/null
++++ b/node_modules/@ngtools/webpack/src/plugin.d.ts
+@@ -0,0 +1,87 @@
++import * as ts from 'typescript';
++import { WebpackCompilerHost } from './compiler_host';
++import { Tapable } from './webpack';
++import { LazyRouteMap } from './lazy_routes';
++/**
++ * Option Constants
++ */
++export interface AotPluginOptions {
++    sourceMap?: boolean;
++    tsConfigPath: string;
++    basePath?: string;
++    entryModule?: string;
++    mainPath?: string;
++    typeChecking?: boolean;
++    skipCodeGeneration?: boolean;
++    replaceExport?: boolean;
++    hostOverrideFileSystem?: {
++        [path: string]: string;
++    };
++    hostReplacementPaths?: {
++        [path: string]: string;
++    };
++    i18nFile?: string;
++    i18nFormat?: string;
++    locale?: string;
++    missingTranslation?: string;
++    exclude?: string | string[];
++    compilerOptions?: ts.CompilerOptions;
++}
++export declare class AotPlugin implements Tapable {
++    private _options;
++    private _compilerOptions;
++    private _angularCompilerOptions;
++    private _program;
++    private _moduleResolutionCache?;
++    private _rootFilePath;
++    private _compilerHost;
++    private _resourceLoader;
++    private _discoveredLazyRoutes;
++    private _lazyRoutes;
++    private _tsConfigPath;
++    private _entryModule;
++    private _donePromise;
++    private _compilation;
++    private _typeCheck;
++    private _skipCodeGeneration;
++    private _replaceExport;
++    private _basePath;
++    private _genDir;
++    private _i18nFile?;
++    private _i18nFormat?;
++    private _locale?;
++    private _missingTranslation?;
++    private _diagnoseFiles;
++    private _firstRun;
++    constructor(options: AotPluginOptions);
++    readonly options: AotPluginOptions;
++    readonly basePath: string;
++    readonly compilation: any;
++    readonly compilerHost: WebpackCompilerHost;
++    readonly compilerOptions: ts.CompilerOptions;
++    readonly done: Promise<void>;
++    readonly entryModule: {
++        path: string;
++        className: string;
++    };
++    readonly genDir: string;
++    readonly program: ts.Program;
++    readonly moduleResolutionCache: ts.ModuleResolutionCache;
++    readonly skipCodeGeneration: boolean;
++    readonly replaceExport: boolean;
++    readonly typeCheck: boolean;
++    readonly i18nFile: string;
++    readonly i18nFormat: string;
++    readonly locale: string;
++    readonly missingTranslation: string;
++    readonly firstRun: boolean;
++    readonly lazyRoutes: LazyRouteMap;
++    readonly discoveredLazyRoutes: LazyRouteMap;
++    private _setupOptions(options);
++    private _findLazyRoutesInAst();
++    private _getLazyRoutesFromNgtools();
++    apply(compiler: any): void;
++    private _translateSourceMap(sourceText, fileName, {line, character});
++    diagnose(fileName: string): void;
++    private _make(compilation, cb);
++}
+new file mode 100644
+--- /dev/null
++++ b/node_modules/@ngtools/webpack/src/plugin.js
+@@ -0,0 +1,528 @@
++"use strict";
++Object.defineProperty(exports, "__esModule", { value: true });
++// @ignoreDep typescript
++const fs = require("fs");
++const path = require("path");
++const ts = require("typescript");
++const SourceMap = require("source-map");
++const ContextElementDependency = require('webpack/lib/dependencies/ContextElementDependency');
++const NodeWatchFileSystem = require('webpack/lib/node/NodeWatchFileSystem');
++const ngtools_api_1 = require("./ngtools_api");
++const resource_loader_1 = require("./resource_loader");
++const compiler_host_1 = require("./compiler_host");
++const entry_resolver_1 = require("./entry_resolver");
++const paths_plugin_1 = require("./paths-plugin");
++const lazy_routes_1 = require("./lazy_routes");
++const virtual_file_system_decorator_1 = require("./virtual_file_system_decorator");
++const benchmark_1 = require("./benchmark");
++const inlineSourceMapRe = /\/\/# sourceMappingURL=data:application\/json;base64,([\s\S]+)$/;
++class AotPlugin {
++    constructor(options) {
++        this._lazyRoutes = Object.create(null);
++        this._compilation = null;
++        this._typeCheck = true;
++        this._skipCodeGeneration = false;
++        this._replaceExport = false;
++        this._diagnoseFiles = {};
++        this._firstRun = true;
++        ngtools_api_1.CompilerCliIsSupported();
++        this._options = Object.assign({}, options);
++        this._setupOptions(this._options);
++    }
++    get options() { return this._options; }
++    get basePath() { return this._basePath; }
++    get compilation() { return this._compilation; }
++    get compilerHost() { return this._compilerHost; }
++    get compilerOptions() { return this._compilerOptions; }
++    get done() { return this._donePromise; }
++    get entryModule() {
++        const splitted = this._entryModule.split('#');
++        const path = splitted[0];
++        const className = splitted[1] || 'default';
++        return { path, className };
++    }
++    get genDir() { return this._genDir; }
++    get program() { return this._program; }
++    get moduleResolutionCache() { return this._moduleResolutionCache; }
++    get skipCodeGeneration() { return this._skipCodeGeneration; }
++    get replaceExport() { return this._replaceExport; }
++    get typeCheck() { return this._typeCheck; }
++    get i18nFile() { return this._i18nFile; }
++    get i18nFormat() { return this._i18nFormat; }
++    get locale() { return this._locale; }
++    get missingTranslation() { return this._missingTranslation; }
++    get firstRun() { return this._firstRun; }
++    get lazyRoutes() { return this._lazyRoutes; }
++    get discoveredLazyRoutes() { return this._discoveredLazyRoutes; }
++    _setupOptions(options) {
++        benchmark_1.time('AotPlugin._setupOptions');
++        // Fill in the missing options.
++        if (!options.hasOwnProperty('tsConfigPath')) {
++            throw new Error('Must specify "tsConfigPath" in the configuration of @ngtools/webpack.');
++        }
++        // TS represents paths internally with '/' and expects the tsconfig path to be in this format
++        this._tsConfigPath = options.tsConfigPath.replace(/\\/g, '/');
++        // Check the base path.
++        const maybeBasePath = path.resolve(process.cwd(), this._tsConfigPath);
++        let basePath = maybeBasePath;
++        if (fs.statSync(maybeBasePath).isFile()) {
++            basePath = path.dirname(basePath);
++        }
++        if (options.hasOwnProperty('basePath')) {
++            basePath = path.resolve(process.cwd(), options.basePath);
++        }
++        const configResult = ts.readConfigFile(this._tsConfigPath, ts.sys.readFile);
++        if (configResult.error) {
++            const diagnostic = configResult.error;
++            const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
++            if (diagnostic.file) {
++                const { line, character } = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
++                throw new Error(`${diagnostic.file.fileName} (${line + 1},${character + 1}): ${message})`);
++            }
++            else {
++                throw new Error(message);
++            }
++        }
++        const tsConfigJson = configResult.config;
++        if (options.hasOwnProperty('compilerOptions')) {
++            tsConfigJson.compilerOptions = Object.assign({}, tsConfigJson.compilerOptions, options.compilerOptions);
++        }
++        // Default exclude to **/*.spec.ts files.
++        if (!options.hasOwnProperty('exclude')) {
++            options['exclude'] = ['**/*.spec.ts'];
++        }
++        // Add custom excludes to default TypeScript excludes.
++        if (options.hasOwnProperty('exclude')) {
++            // If the tsconfig doesn't contain any excludes, we must add the default ones before adding
++            // any extra ones (otherwise we'd include all of these which can cause unexpected errors).
++            // This is the same logic as present in TypeScript.
++            if (!tsConfigJson.exclude) {
++                tsConfigJson['exclude'] = ['node_modules', 'bower_components', 'jspm_packages'];
++                if (tsConfigJson.compilerOptions && tsConfigJson.compilerOptions.outDir) {
++                    tsConfigJson.exclude.push(tsConfigJson.compilerOptions.outDir);
++                }
++            }
++            // Join our custom excludes with the existing ones.
++            tsConfigJson.exclude = tsConfigJson.exclude.concat(options.exclude);
++        }
++        const tsConfig = ts.parseJsonConfigFileContent(tsConfigJson, ts.sys, basePath, undefined, this._tsConfigPath);
++        let fileNames = tsConfig.fileNames;
++        this._rootFilePath = fileNames;
++        // Check the genDir. We generate a default gendir that's under basepath; it will generate
++        // a `node_modules` directory and because of that we don't want TypeScript resolution to
++        // resolve to that directory but the real `node_modules`.
++        let genDir = path.join(basePath, '$$_gendir');
++        this._compilerOptions = tsConfig.options;
++        // Default plugin sourceMap to compiler options setting.
++        if (!options.hasOwnProperty('sourceMap')) {
++            options.sourceMap = this._compilerOptions.sourceMap || false;
++        }
++        // Force the right sourcemap options.
++        if (options.sourceMap) {
++            this._compilerOptions.sourceMap = true;
++            this._compilerOptions.inlineSources = true;
++            this._compilerOptions.inlineSourceMap = false;
++            this._compilerOptions.sourceRoot = basePath;
++        }
++        else {
++            this._compilerOptions.sourceMap = false;
++            this._compilerOptions.sourceRoot = undefined;
++            this._compilerOptions.inlineSources = undefined;
++            this._compilerOptions.inlineSourceMap = undefined;
++            this._compilerOptions.mapRoot = undefined;
++        }
++        // Default noEmitOnError to true
++        if (this._compilerOptions.noEmitOnError !== false) {
++            this._compilerOptions.noEmitOnError = true;
++        }
++        // Compose Angular Compiler Options.
++        this._angularCompilerOptions = Object.assign({ genDir }, this._compilerOptions, tsConfig.raw['angularCompilerOptions'], { basePath });
++        if (this._angularCompilerOptions.hasOwnProperty('genDir')) {
++            genDir = path.resolve(basePath, this._angularCompilerOptions.genDir);
++            this._angularCompilerOptions.genDir = genDir;
++        }
++        this._basePath = basePath;
++        this._genDir = genDir;
++        if (options.typeChecking !== undefined) {
++            this._typeCheck = options.typeChecking;
++        }
++        if (options.skipCodeGeneration !== undefined) {
++            this._skipCodeGeneration = options.skipCodeGeneration;
++        }
++        this._compilerHost = new compiler_host_1.WebpackCompilerHost(this._compilerOptions, this._basePath);
++        // Override some files in the FileSystem.
++        if (options.hostOverrideFileSystem) {
++            for (const filePath of Object.keys(options.hostOverrideFileSystem)) {
++                this._compilerHost.writeFile(filePath, options.hostOverrideFileSystem[filePath], false);
++            }
++        }
++        // Override some files in the FileSystem with paths from the actual file system.
++        if (options.hostReplacementPaths) {
++            for (const filePath of Object.keys(options.hostReplacementPaths)) {
++                const replacementFilePath = options.hostReplacementPaths[filePath];
++                const content = this._compilerHost.readFile(replacementFilePath);
++                this._compilerHost.writeFile(filePath, content, false);
++            }
++        }
++        this._program = ts.createProgram(this._rootFilePath, this._compilerOptions, this._compilerHost);
++        // We use absolute paths everywhere.
++        if (ts.createModuleResolutionCache) {
++            this._moduleResolutionCache = ts.createModuleResolutionCache(this._basePath, (fileName) => this._compilerHost.resolve(fileName));
++        }
++        // We enable caching of the filesystem in compilerHost _after_ the program has been created,
++        // because we don't want SourceFile instances to be cached past this point.
++        this._compilerHost.enableCaching();
++        this._resourceLoader = new resource_loader_1.WebpackResourceLoader();
++        if (options.entryModule) {
++            this._entryModule = options.entryModule;
++        }
++        else if (tsConfig.raw['angularCompilerOptions']
++            && tsConfig.raw['angularCompilerOptions'].entryModule) {
++            this._entryModule = path.resolve(this._basePath, tsConfig.raw['angularCompilerOptions'].entryModule);
++        }
++        // still no _entryModule? => try to resolve from mainPath
++        if (!this._entryModule && options.mainPath) {
++            const mainPath = path.resolve(basePath, options.mainPath);
++            this._entryModule = entry_resolver_1.resolveEntryModuleFromMain(mainPath, this._compilerHost, this._program)[0];
++        }
++        if (options.hasOwnProperty('i18nFile')) {
++            this._i18nFile = options.i18nFile;
++        }
++        if (options.hasOwnProperty('i18nFormat')) {
++            this._i18nFormat = options.i18nFormat;
++        }
++        if (options.hasOwnProperty('locale')) {
++            this._locale = options.locale;
++        }
++        if (options.hasOwnProperty('replaceExport')) {
++            this._replaceExport = options.replaceExport || this._replaceExport;
++        }
++        if (options.hasOwnProperty('missingTranslation')) {
++            const [MAJOR, MINOR, PATCH] = ngtools_api_1.VERSION.full.split('.').map((x) => parseInt(x, 10));
++            if (MAJOR < 4 || (MINOR == 2 && PATCH < 2)) {
++                console.warn((`The --missing-translation parameter will be ignored because it is only `
++                    + `compatible with Angular version 4.2.0 or higher. If you want to use it, please `
++                    + `upgrade your Angular version.\n`));
++            }
++            this._missingTranslation = options.missingTranslation;
++        }
++        benchmark_1.timeEnd('AotPlugin._setupOptions');
++    }
++    _findLazyRoutesInAst() {
++        benchmark_1.time('AotPlugin._findLazyRoutesInAst');
++        const result = Object.create(null);
++        const changedFilePaths = this._compilerHost.getChangedFilePaths();
++        for (const filePath of changedFilePaths) {
++            const fileLazyRoutes = lazy_routes_1.findLazyRoutes(filePath, this._compilerHost, this._program);
++            for (const routeKey of Object.keys(fileLazyRoutes)) {
++                const route = fileLazyRoutes[routeKey];
++                if (routeKey in this._lazyRoutes) {
++                    if (route === null) {
++                        this._lazyRoutes[routeKey] = null;
++                    }
++                    else if (this._lazyRoutes[routeKey] !== route) {
++                        this._compilation.warnings.push(new Error(`Duplicated path in loadChildren detected during a rebuild. `
++                            + `We will take the latest version detected and override it to save rebuild time. `
++                            + `You should perform a full build to validate that your routes don't overlap.`));
++                    }
++                }
++                else {
++                    result[routeKey] = route;
++                }
++            }
++        }
++        benchmark_1.timeEnd('AotPlugin._findLazyRoutesInAst');
++        return result;
++    }
++    _getLazyRoutesFromNgtools() {
++        try {
++            benchmark_1.time('AotPlugin._getLazyRoutesFromNgtools');
++            const result = ngtools_api_1.__NGTOOLS_PRIVATE_API_2.listLazyRoutes({
++                program: this._program,
++                host: this._compilerHost,
++                angularCompilerOptions: this._angularCompilerOptions,
++                entryModule: this._entryModule
++            });
++            benchmark_1.timeEnd('AotPlugin._getLazyRoutesFromNgtools');
++            return result;
++        }
++        catch (err) {
++            // We silence the error that the @angular/router could not be found. In that case, there is
++            // basically no route supported by the app itself.
++            if (err.message.startsWith('Could not resolve module @angular/router')) {
++                return {};
++            }
++            else {
++                throw err;
++            }
++        }
++    }
++    // registration hook for webpack plugin
++    apply(compiler) {
++        // Decorate inputFileSystem to serve contents of CompilerHost.
++        // Use decorated inputFileSystem in watchFileSystem.
++        compiler.plugin('environment', () => {
++            compiler.inputFileSystem = new virtual_file_system_decorator_1.VirtualFileSystemDecorator(compiler.inputFileSystem, this._compilerHost);
++            compiler.watchFileSystem = new NodeWatchFileSystem(compiler.inputFileSystem);
++        });
++        compiler.plugin('invalid', () => {
++            // Turn this off as soon as a file becomes invalid and we're about to start a rebuild.
++            this._firstRun = false;
++            this._diagnoseFiles = {};
++        });
++        // Add lazy modules to the context module for @angular/core/src/linker
++        compiler.plugin('context-module-factory', (cmf) => {
++            const angularCorePackagePath = require.resolve('@angular/core/package.json');
++            const angularCorePackageJson = require(angularCorePackagePath);
++            const angularCoreModulePath = path.resolve(path.dirname(angularCorePackagePath), angularCorePackageJson['module']);
++            // Pick the last part after the last node_modules instance. We do this to let people have
++            // a linked @angular/core or cli which would not be under the same path as the project
++            // being built.
++            const angularCoreModuleDir = path.dirname(angularCoreModulePath).split(/node_modules/).pop();
++            // Also support the es2015 in Angular versions that have it.
++            let angularCoreEs2015Dir;
++            if (angularCorePackageJson['es2015']) {
++                const angularCoreEs2015Path = path.resolve(path.dirname(angularCorePackagePath), angularCorePackageJson['es2015']);
++                angularCoreEs2015Dir = path.dirname(angularCoreEs2015Path).split(/node_modules/).pop();
++            }
++            cmf.plugin('after-resolve', (result, callback) => {
++                if (!result) {
++                    return callback();
++                }
++                // Alter only request from Angular;
++                //   @angular/core/src/linker matches for 2.*.*,
++                //   The other logic is for flat modules and requires reading the package.json of angular
++                //     (see above).
++                if (!result.resource.endsWith(path.join('@angular/core/src/linker'))
++                    && !(angularCoreModuleDir && result.resource.endsWith(angularCoreModuleDir))
++                    && !(angularCoreEs2015Dir && result.resource.endsWith(angularCoreEs2015Dir))) {
++                    return callback(null, result);
++                }
++                this.done.then(() => {
++                    result.resource = this.genDir;
++                    result.dependencies.forEach((d) => d.critical = false);
++                    result.resolveDependencies = (_fs, _resource, _recursive, _regExp, cb) => {
++                        const dependencies = Object.keys(this._lazyRoutes)
++                            .map((key) => {
++                            const value = this._lazyRoutes[key];
++                            if (value !== null) {
++                                return new ContextElementDependency(value, key);
++                            }
++                            else {
++                                return null;
++                            }
++                        })
++                            .filter(x => !!x);
++                        cb(null, dependencies);
++                    };
++                    return callback(null, result);
++                }, () => callback(null))
++                    .catch(err => callback(err));
++            });
++        });
++        compiler.plugin('make', (compilation, cb) => this._make(compilation, cb));
++        compiler.plugin('after-emit', (compilation, cb) => {
++            compilation._ngToolsWebpackPluginInstance = null;
++            cb();
++        });
++        compiler.plugin('done', () => {
++            this._donePromise = null;
++            this._compilation = null;
++        });
++        compiler.plugin('after-resolvers', (compiler) => {
++            // Virtual file system.
++            // Wait for the plugin to be done when requesting `.ts` files directly (entry points), or
++            // when the issuer is a `.ts` file.
++            compiler.resolvers.normal.plugin('before-resolve', (request, cb) => {
++                if (this.done && (request.request.endsWith('.ts')
++                    || (request.context.issuer && request.context.issuer.endsWith('.ts')))) {
++                    this.done.then(() => cb(), () => cb());
++                }
++                else {
++                    cb();
++                }
++            });
++        });
++        compiler.plugin('normal-module-factory', (nmf) => {
++            compiler.resolvers.normal.apply(new paths_plugin_1.PathsPlugin({
++                nmf,
++                tsConfigPath: this._tsConfigPath,
++                compilerOptions: this._compilerOptions,
++                compilerHost: this._compilerHost
++            }));
++        });
++    }
++    _translateSourceMap(sourceText, fileName, { line, character }) {
++        const match = sourceText.match(inlineSourceMapRe);
++        if (!match) {
++            return { line, character, fileName };
++        }
++        // On any error, return line and character.
++        try {
++            const sourceMapJson = JSON.parse(Buffer.from(match[1], 'base64').toString());
++            const consumer = new SourceMap.SourceMapConsumer(sourceMapJson);
++            const original = consumer.originalPositionFor({ line, column: character });
++            return {
++                line: typeof original.line == 'number' ? original.line : line,
++                character: typeof original.column == 'number' ? original.column : character,
++                fileName: original.source || fileName
++            };
++        }
++        catch (e) {
++            return { line, character, fileName };
++        }
++    }
++    diagnose(fileName) {
++        if (this._diagnoseFiles[fileName]) {
++            return;
++        }
++        this._diagnoseFiles[fileName] = true;
++        const sourceFile = this._program.getSourceFile(fileName);
++        if (!sourceFile) {
++            return;
++        }
++        const diagnostics = [
++            ...(this._program.getCompilerOptions().declaration
++                ? this._program.getDeclarationDiagnostics(sourceFile) : []),
++            ...this._program.getSyntacticDiagnostics(sourceFile),
++            ...this._program.getSemanticDiagnostics(sourceFile)
++        ];
++        if (diagnostics.length > 0) {
++            diagnostics.forEach(diagnostic => {
++                const messageText = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
++                let message;
++                if (diagnostic.file) {
++                    const position = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
++                    const sourceText = diagnostic.file.getFullText();
++                    let { line, character, fileName } = this._translateSourceMap(sourceText, diagnostic.file.fileName, position);
++                    message = `${fileName} (${line + 1},${character + 1}): ${messageText}`;
++                }
++                else {
++                    message = messageText;
++                }
++                switch (diagnostic.category) {
++                    case ts.DiagnosticCategory.Error:
++                        this._compilation.errors.push(message);
++                        break;
++                    default:
++                        this._compilation.warnings.push(message);
++                }
++            });
++        }
++    }
++    _make(compilation, cb) {
++        benchmark_1.time('AotPlugin._make');
++        this._compilation = compilation;
++        if (this._compilation._ngToolsWebpackPluginInstance) {
++            return cb(new Error('An @ngtools/webpack plugin already exist for this compilation.'));
++        }
++        this._compilation._ngToolsWebpackPluginInstance = this;
++        this._resourceLoader.update(compilation);
++        this._donePromise = Promise.resolve()
++            .then(() => {
++            if (this._skipCodeGeneration) {
++                return;
++            }
++            benchmark_1.time('AotPlugin._make.codeGen');
++            // Create the Code Generator.
++            return ngtools_api_1.__NGTOOLS_PRIVATE_API_2.codeGen({
++                basePath: this._basePath,
++                compilerOptions: this._compilerOptions,
++                program: this._program,
++                host: this._compilerHost,
++                angularCompilerOptions: this._angularCompilerOptions,
++                i18nFile: this.i18nFile,
++                i18nFormat: this.i18nFormat,
++                locale: this.locale,
++                missingTranslation: this.missingTranslation,
++                readResource: (path) => this._resourceLoader.get(path)
++            })
++                .then(() => benchmark_1.timeEnd('AotPlugin._make.codeGen'));
++        })
++            .then(() => {
++            // Get the ngfactory that were created by the previous step, and add them to the root
++            // file path (if those files exists).
++            const newRootFilePath = this._compilerHost.getChangedFilePaths()
++                .filter(x => x.match(/\.ngfactory\.ts$/));
++            // Remove files that don't exist anymore, and add new files.
++            this._rootFilePath = this._rootFilePath
++                .filter(x => this._compilerHost.fileExists(x))
++                .concat(newRootFilePath);
++            // Create a new Program, based on the old one. This will trigger a resolution of all
++            // transitive modules, which include files that might just have been generated.
++            // This needs to happen after the code generator has been created for generated files
++            // to be properly resolved.
++            benchmark_1.time('AotPlugin._make.createProgram');
++            this._program = ts.createProgram(this._rootFilePath, this._compilerOptions, this._compilerHost, this._program);
++            benchmark_1.timeEnd('AotPlugin._make.createProgram');
++        })
++            .then(() => {
++            // Re-diagnose changed files.
++            benchmark_1.time('AotPlugin._make.diagnose');
++            const changedFilePaths = this._compilerHost.getChangedFilePaths();
++            changedFilePaths.forEach(filePath => this.diagnose(filePath));
++            benchmark_1.timeEnd('AotPlugin._make.diagnose');
++        })
++            .then(() => {
++            if (this._typeCheck) {
++                benchmark_1.time('AotPlugin._make._typeCheck');
++                const diagnostics = this._program.getGlobalDiagnostics();
++                if (diagnostics.length > 0) {
++                    const message = diagnostics
++                        .map(diagnostic => {
++                        const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
++                        if (diagnostic.file) {
++                            const { line, character } = diagnostic.file.getLineAndCharacterOfPosition(diagnostic.start);
++                            return `${diagnostic.file.fileName} (${line + 1},${character + 1}): ${message})`;
++                        }
++                        else {
++                            return message;
++                        }
++                    })
++                        .join('\n');
++                    throw new Error(message);
++                }
++                benchmark_1.timeEnd('AotPlugin._make._typeCheck');
++            }
++        })
++            .then(() => {
++            // We need to run the `listLazyRoutes` the first time because it also navigates libraries
++            // and other things that we might miss using the findLazyRoutesInAst.
++            benchmark_1.time('AotPlugin._make._discoveredLazyRoutes');
++            this._discoveredLazyRoutes = this.firstRun
++                ? this._getLazyRoutesFromNgtools()
++                : this._findLazyRoutesInAst();
++            // Process the lazy routes discovered.
++            Object.keys(this.discoveredLazyRoutes)
++                .forEach(k => {
++                const lazyRoute = this.discoveredLazyRoutes[k];
++                k = k.split('#')[0];
++                if (lazyRoute === null) {
++                    return;
++                }
++                if (this.skipCodeGeneration) {
++                    this._lazyRoutes[k] = lazyRoute;
++                }
++                else {
++                    const factoryPath = lazyRoute.replace(/(\.d)?\.ts$/, '.ngfactory.ts');
++                    const lr = path.relative(this.basePath, factoryPath);
++                    this._lazyRoutes[k + '.ngfactory'] = path.join(this.genDir, lr);
++                }
++            });
++            benchmark_1.timeEnd('AotPlugin._make._discoveredLazyRoutes');
++        })
++            .then(() => {
++            if (this._compilation.errors == 0) {
++                this._compilerHost.resetChangedFileTracker();
++            }
++            benchmark_1.timeEnd('AotPlugin._make');
++            cb();
++        }, (err) => {
++            compilation.errors.push(err.stack);
++            benchmark_1.timeEnd('AotPlugin._make');
++            cb();
++        });
++    }
++}
++exports.AotPlugin = AotPlugin;
++//# sourceMappingURL=/users/hansl/sources/hansl/angular-cli/src/plugin.js.map
+\ No newline at end of file
+new file mode 100644
+--- /dev/null
++++ b/node_modules/@ngtools/webpack/src/transformers/replace_ngModules.js
+@@ -0,0 +1,48 @@
++"use strict";
++Object.defineProperty(exports, "__esModule", { value: true });
++// @ignoreDep typescript
++const ts = require("typescript");
++const path_1 = require("path");
++const ast_helpers_1 = require("./ast_helpers");
++const insert_import_1 = require("./insert_import");
++const interfaces_1 = require("./interfaces");
++const make_transform_1 = require("./make_transform");
++function replaceNgModules(shouldTransform, getEntryModule, getTypeChecker) {
++    const standardTransform = function (sourceFile) {
++        const ops = [];
++        const entryModule = getEntryModule();
++        if (!shouldTransform(sourceFile.fileName) || !entryModule) {
++            return ops;
++        }
++       
++        // Find all identifiers.
++        const entryModuleIdentifiers = ast_helpers_1.collectDeepNodes(sourceFile, ts.SyntaxKind.Identifier)
++            .filter(identifier => identifier.text === entryModule.className);
++        if (entryModuleIdentifiers.length === 0) {
++            return [];
++        }
++        const relativeEntryModulePath = path_1.relative(path_1.dirname(sourceFile.fileName), entryModule.path);
++        const normalizedEntryModulePath = `./${relativeEntryModulePath}`.replace(/\\/g, '/');
++        // Find the bootstrap calls.
++        entryModuleIdentifiers.forEach(entryModuleIdentifier => {
++            // if (sourceFile.fileName.indexOf("MyProfileApp.ts") < 0){
++            //     return;
++            // }
++            
++            const idPlatformBrowser = ts.createUniqueName('__NgCli_bootstrap_');
++            const idNgFactory = ts.createUniqueName('__NgCli_bootstrap_');
++            // Add the transform operations.
++            const factoryClassName = entryModule.className + 'NgFactory';
++            const factoryModulePath = normalizedEntryModulePath + '.ngfactory';
++            ops.push(
++            // Replace the entry module import.
++            ...insert_import_1.insertStarImport(sourceFile, idNgFactory, factoryModulePath), new interfaces_1.ReplaceNodeOperation(sourceFile, entryModuleIdentifier, ts.createPropertyAccess(idNgFactory, ts.createIdentifier(factoryClassName))), 
++            // Replace the platformBrowserDynamic import.
++            //...insert_import_1.insertStarImport(sourceFile, idPlatformBrowser, '@angular/platform-browser'), new interfaces_1.ReplaceNodeOperation(sourceFile, platformBrowserDynamicIdentifier, ts.createPropertyAccess(idPlatformBrowser, 'platformBrowser')), new interfaces_1.ReplaceNodeOperation(sourceFile, bootstrapModuleIdentifier, ts.createIdentifier('bootstrapModuleFactory'))
++            );
++        });
++        return ops;
++    };
++    return make_transform_1.makeTransform(standardTransform, getTypeChecker);
++}
++exports.replaceNgModules = replaceNgModules;
+\ No newline at end of file
